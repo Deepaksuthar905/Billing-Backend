@@ -8,7 +8,7 @@ use App\Models\Party;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
-
+use Illuminate\Support\Facades\Log;
 class InvoiceController extends Controller
 {
     /**
@@ -96,45 +96,67 @@ class InvoiceController extends Controller
         if (! $response->successful()) {
             return response()->json(['message' => 'External API request failed', 'status' => $response->status()], 502);
         }
+        echo $response->body();
 
         $body = $response->json();
-        $data = is_array($body) && isset($body['data']) ? $body['data'] : (is_array($body) ? $body : []);
+        // getamtlist returns data.list
+        $data = $body['data']['list'] ?? $body['data'] ?? (is_array($body) ? $body : []);
 
-        $created = 0;
+        $partiesCreated = 0;
+        $invoicesCreated = 0;
+
         foreach ($data as $record) {
-            $cid = $record['cid'] ?? $record['pid'] ?? $record['party_id'] ?? $record['customer_id'] ?? null;
-            if ($cid === null) {
-                continue;
+            $cid = $record['cid'] ?? null;
+            $cidStr = $cid !== null && $cid !== '' ? (string) $cid : null;
+
+            // Party: cid se find, nahi mila to create with full mapping
+            $party = $cidStr !== null ? Party::where('cid', $cidStr)->first() : null;
+
+            $partyAttrs = [
+                'partyname' => $record['billing_name'] ?? '',
+                'mobno' => $record['billing_name'] ?? '',
+                'cid' => $cidStr ?? (string) ($record['cid'] ?? ''),
+                'billing_name' => $record['billing_name'] ?? null,
+                'gst_no' => $record['gstno'] ?? null,
+                'city' => $record['city'] ?? null,
+                'state' => $record['state'] ?? null,
+                'gst_reg' => isset($record['gst_regular']) ? (int) (bool) $record['gst_regular'] : 0,
+                'same_state' => isset($record['state']) && trim((string) $record['state']) === 'Rajasthan' ? 1 : 0,
+            ];
+
+            if ($party) {
+                $party->update($partyAttrs);
+            } else {
+                $partyAttrs['partyname'] = $partyAttrs['partyname'] ?: ('Synced-' . ($cidStr ?? $record['aid'] ?? ''));
+                $party = Party::create($partyAttrs);
+                $partiesCreated++;
             }
 
-            $party = Party::where('cid', (string) $cid)->first();
-            if (! $party) {
-                $party = Party::create([
-                    'cid' => (string) $cid,
-                    'partyname' => $record['customer_name'] ?? $record['partyname'] ?? 'Synced-' . $cid,
-                ]);
-            }
-
+            // Invoice: getamtlist keys -> amt, dt, invoice, payby, state
             Invoice::create([
                 'pid' => $party->pid,
-                'inv_no' => $record['inv_no'] ?? null,
+                'inv_no' => $record['invoice'] ?? $record['amid'] ?? null,
                 'dt' => $record['dt'] ?? now()->format('Y-m-d'),
                 'state' => $record['state'] ?? null,
-                'gst' => $record['gst'] ?? 0,
-                'payment' => $record['payment'] ?? 0,
-                'cgst' => $record['cgst'] ?? 0,
-                'sgst' => $record['sgst'] ?? 0,
-                'igst' => $record['igst'] ?? 0,
-                'paytype' => $record['paytype'] ?? 0,
-                'paynow' => $record['paynow'] ?? 0,
-                'payby' => $record['payby'] ?? null,
-                'refno' => $record['refno'] ?? null,
-                'paylater' => $record['paylater'] ?? 0,
-                'balance' => $record['balance'] ?? 0,
+                'gst' => (float) ($record['gstext'] ?? 0),
+                'payment' => (float) ($record['amt'] ?? 0),
+                'cgst' => 0,
+                'sgst' => 0,
+                'igst' => 0,
+                'paytype' => 0,
+                'paynow' => (float) ($record['amt'] ?? 0),
+                'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
+                'refno' => $record['aid'] ?? null,
+                'paylater' => 0,
+                'balance' => 0,
             ]);
-            $created++;
+            $invoicesCreated++;
         }
 
-        return response()->json(['message' => 'Invoices synced successfully', 'created' => $created], 200);
+        return response()->json([
+            'message' => 'Sync successful',
+            'parties_created' => $partiesCreated,
+            'invoices_created' => $invoicesCreated,
+        ], 200);
     }
 }
