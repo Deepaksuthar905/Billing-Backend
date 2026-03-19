@@ -20,7 +20,7 @@ class Purchase extends Model
      * @var list<string>
      */
     protected $fillable = [
-        'prhid',
+        'item_id',
         'p_inv_no',
         'dt',
         'state',
@@ -52,11 +52,11 @@ class Purchase extends Model
     }
 
     /**
-     * Purchase belongs to PurchaseHead (prhid -> purchase_head.prhid).
+     * Purchase belongs to Item (item_id -> items.item_id).
      */
-    public function purchaseHead()
+    public function item()
     {
-        return $this->belongsTo(PurchaseHead::class, 'prhid', 'prhid');
+        return $this->belongsTo(Item::class, 'item_id', 'item_id');
     }
 
     /**

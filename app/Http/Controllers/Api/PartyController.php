@@ -21,6 +21,7 @@ class PartyController extends Controller
             'state' => ['nullable', 'string', 'max:100'],
             'gst_reg' => ['nullable', 'boolean'],
             'same_state' => ['nullable', 'boolean'],
+            'prtytyp' => ['nullable', 'integer', 'in:0,1'],
         ]);
 
         // Normalize 0/1 to boolean if sent as integer
@@ -40,9 +41,18 @@ class PartyController extends Controller
     }
 
     //fetch all parties
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $parties = Party::all();
+        $query = Party::query();
+
+        if ($request->filled('prtytyp')) {
+            $validated = $request->validate([
+                'prtytyp' => ['integer', 'in:0,1'],
+            ]);
+            $query->where('prtytyp', (int) $validated['prtytyp']);
+        }
+
+        $parties = $query->get();
         return response()->json([
             'message' => 'Parties fetched successfully',
             'data' => $parties,

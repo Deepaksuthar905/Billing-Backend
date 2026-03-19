@@ -23,6 +23,7 @@ class Invoice extends Model
         'inv_no',
         'dt',
         'state',
+        'addr',
         'pid',
         'gst',
         'payment',

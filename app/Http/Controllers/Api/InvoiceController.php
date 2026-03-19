@@ -20,6 +20,7 @@ class InvoiceController extends Controller
             'inv_no' => ['nullable', 'string', 'max:100'],
             'dt' => ['nullable', 'date'],
             'state' => ['nullable', 'string', 'max:100'],
+            'addr' => ['nullable', 'string'],
             'pid' => ['required', 'integer', 'exists:party,pid'],
             'gst' => ['nullable', 'numeric', 'min:0'],
             'payment' => ['nullable', 'numeric', 'min:0'],
@@ -120,6 +121,7 @@ class InvoiceController extends Controller
                 'gst_no' => $record['gstno'] ?? null,
                 'city' => $record['city'] ?? null,
                 'state' => $record['state'] ?? null,
+                'mobno' => $record['mob'] ?? null,
                 'gst_reg' => isset($record['gst_regular']) ? (int) (bool) $record['gst_regular'] : 0,
                 'same_state' => isset($record['state']) && trim((string) $record['state']) === 'Rajasthan' ? 1 : 0,
             ];
@@ -138,6 +140,7 @@ class InvoiceController extends Controller
                 'inv_no' => $record['invoice'] ?? $record['amid'] ?? null,
                 'dt' => $record['dt'] ?? now()->format('Y-m-d'),
                 'state' => $record['state'] ?? null,
+                'addr' => $record['addr'] ?? $record['address'] ?? null,
                 'gst' => (float) ($record['gstext'] ?? 0),
                 'payment' => (float) ($record['amt'] ?? 0),
                 'cgst' => 0,

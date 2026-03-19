@@ -24,6 +24,9 @@ class Expense extends Model
         'description',
         'receipt_no',
         'payment',
+        'igst',
+        'cgst',
+        'sgst',
         'dt',
         'party',
         'payby',
@@ -41,6 +44,9 @@ class Expense extends Model
             'dt' => 'date',
             'payby' => 'integer',
             'payment' => 'decimal:2',
+            'igst' => 'integer',
+            'cgst' => 'integer',
+            'sgst' => 'integer',
         ];
     }
 

@@ -22,6 +22,7 @@ class Party extends Model
      */
     protected $fillable = [
         'partyname',
+        'prtytyp',
         'mobno',
         'cid',
         'billing_name',
@@ -40,6 +41,7 @@ class Party extends Model
     protected function casts(): array
     {
         return [
+            'prtytyp' => 'integer',
             'gst_reg' => 'boolean',
             'same_state' => 'boolean',
         ];
