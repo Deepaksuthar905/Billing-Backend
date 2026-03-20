@@ -29,8 +29,8 @@ Route::prefix('api')->group(function () {
 
     // ----- Frontend APIs (documentation table) -----
     Route::get('/dashboard', [DashboardController::class, 'index']);
-    Route::get('/invoices', [InvoiceController::class, 'index']);
-    Route::post('/invoices', [InvoiceController::class, 'store']);
+    // Route::get('/invoices', [InvoiceController::class, 'index']);
+    // Route::post('/invoices', [InvoiceController::class, 'store']);
     Route::get('/sales', [SalesController::class, 'index']);
     // Route::get('/purchase-orders', [PurchaseController::class, 'index']);
     // Route::get('/vendors', [VendorController::class, 'index']);

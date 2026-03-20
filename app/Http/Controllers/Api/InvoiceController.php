@@ -68,6 +68,16 @@ class InvoiceController extends Controller
                 'customer' => $inv->party?->partyname,
                 'amount' => (float) $inv->payment,
                 'gst' => (float) $inv->gst,
+                'cgst' => (float) $inv->cgst,
+                'sgst' => (float) $inv->sgst,
+                'igst' => (float) $inv->igst,
+                'paytype' => $inv->paytype,
+                'paynow' => (float) $inv->paynow,
+                'payby' => $inv->payby,
+                'refno' => $inv->refno,
+                'paylater' => (float) $inv->paylater,
+                'balance' => (float) $inv->balance,
+                'state' => $inv->state,
                 'status' => $status,
             ];
         });
