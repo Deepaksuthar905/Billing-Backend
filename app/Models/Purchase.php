@@ -25,6 +25,7 @@ class Purchase extends Model
         'dt',
         'state',
         'payment',
+        'taxable_amt',
         'party_id',
         'gst',
         'cgst',
@@ -44,6 +45,7 @@ class Purchase extends Model
         return [
             'dt' => 'date',
             'payment' => 'decimal:2',
+            'taxable_amt' => 'decimal:2',
             'gst' => 'decimal:2',
             'cgst' => 'decimal:2',
             'sgst' => 'decimal:2',

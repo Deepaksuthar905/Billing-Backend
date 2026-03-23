@@ -20,6 +20,7 @@ class ExpenseController extends Controller
             'description' => ['nullable', 'string'],
             'receipt_no' => ['nullable', 'integer', 'min:1'],
             'payment' => ['nullable', 'numeric', 'min:0'],
+            'taxable_amt' => ['nullable', 'numeric', 'min:0'],
             'igst' => ['nullable', 'integer'],
             'cgst' => ['nullable', 'integer'],
             'sgst' => ['nullable', 'integer'],

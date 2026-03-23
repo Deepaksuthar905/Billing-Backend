@@ -24,6 +24,7 @@ class InvoiceController extends Controller
             'pid' => ['required', 'integer', 'exists:party,pid'],
             'gst' => ['nullable', 'numeric', 'min:0'],
             'payment' => ['nullable', 'numeric', 'min:0'],
+            'taxable_amt' => ['nullable', 'numeric', 'min:0'],
             'cgst' => ['nullable', 'numeric', 'min:0'],
             'sgst' => ['nullable', 'numeric', 'min:0'],
             'igst' => ['nullable', 'numeric', 'min:0'],

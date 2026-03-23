@@ -22,6 +22,7 @@ class PurchaseController extends Controller
             'dt' => ['nullable', 'date'],
             'state' => ['nullable', 'string', 'max:100'],
             'payment' => ['nullable', 'numeric', 'min:0'],
+            'taxable_amt' => ['nullable', 'numeric', 'min:0'],
             'party_id' => ['nullable', 'integer', 'exists:party,pid'],
             'gst' => ['nullable', 'numeric', 'min:0'],
             'cgst' => ['nullable', 'numeric', 'min:0'],
@@ -61,6 +62,12 @@ class PurchaseController extends Controller
             'vendor' => $p->party?->partyname,
             'amount' => (float) $p->payment,
             'status' => 'completed',
+            'taxable_amt' => (float) $p->taxable_amt,
+            'igst' => (float) $p->igst,
+            'cgst' => (float) $p->cgst,
+            'sgst' => (float) $p->sgst,
+            'state' => $p->state,
+            'gst' => (float) $p->gst,
         ]);
 
         return response()->json(['data' => $data], 200);
