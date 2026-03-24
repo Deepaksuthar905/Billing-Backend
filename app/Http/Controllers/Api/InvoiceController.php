@@ -146,9 +146,17 @@ class InvoiceController extends Controller
             }
 
             // Invoice: getamtlist keys -> amt, dt, invoice, payby, state
+            $refNo = isset($record['amid']) ? trim((string) $record['amid']) : null;
+            $refNo = $refNo !== '' ? $refNo : null;
+
+            // Avoid creating duplicate invoice entries for same refno.
+            if ($refNo !== null && Invoice::where('refno', $refNo)->exists()) {
+                continue;
+            }
+
             Invoice::create([
                 'pid' => $party->pid,
-                'inv_no' => $record['invoice'] ?? $record['amid'] ?? null,
+                'inv_no' => $record['invoice'] ?? null,
                 'dt' => $record['dt'] ?? now()->format('Y-m-d'),
                 'state' => $record['state'] ?? null,
                 'addr' => $record['addr'] ?? $record['address'] ?? null,
@@ -160,7 +168,7 @@ class InvoiceController extends Controller
                 'paytype' => 0,
                 'paynow' => (float) ($record['amt'] ?? 0),
                 'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
-                'refno' => $record['aid'] ?? null,
+                'refno' => $refNo,
                 'paylater' => 0,
                 'balance' => 0,
             ]);
