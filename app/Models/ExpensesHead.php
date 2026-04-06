@@ -35,4 +35,12 @@ class ExpensesHead extends Model
             'type' => 'integer',
         ];
     }
+
+    /**
+     * Expenses under this head (expenses.exhid -> expenses_head.exhid).
+     */
+    public function expenses()
+    {
+        return $this->hasMany(Expense::class, 'exhid', 'exhid');
+    }
 }

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Expense;
 use App\Models\ExpensesHead;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -32,7 +33,17 @@ class ExpensesHeadController extends Controller
      */
     public function index(): JsonResponse
     {
-        $expensesHeads = ExpensesHead::all();
+        $paymentByHead = Expense::query()
+            ->selectRaw('exhid, COALESCE(SUM(payment), 0) as total_payment')
+            ->groupBy('exhid')
+            ->pluck('total_payment', 'exhid');
+
+        $expensesHeads = ExpensesHead::all()->map(function (ExpensesHead $head) use ($paymentByHead) {
+            $row = $head->toArray();
+            $row['payment'] = (float) ($paymentByHead[$head->exhid] ?? 0);
+
+            return $row;
+        });
 
         return response()->json([
             'message' => 'Expenses heads fetched successfully',

@@ -65,6 +65,7 @@ class InvoiceController extends Controller
             $status = ($inv->balance && (float) $inv->balance > 0) ? 'pending' : 'paid';
             return [
                 'id' => $inv->invid,
+                'inv_no' => $inv->inv_no,
                 'date' => $inv->dt?->format('Y-m-d'),
                 'customer' => $inv->party?->partyname,
                 'amount' => (float) $inv->payment,
