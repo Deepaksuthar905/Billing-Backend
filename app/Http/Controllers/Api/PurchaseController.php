@@ -45,7 +45,9 @@ class PurchaseController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Purchase::with(['party', 'payBy']);
+        $query = Purchase::with(['party', 'payBy'])->where(function ($q) {
+            $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+        });
 
         if ($search = $request->query('search')) {
             $query->where(function ($q) use ($search) {
@@ -71,6 +73,27 @@ class PurchaseController extends Controller
         ]);
 
         return response()->json(['data' => $data], 200);
+    }
+
+    public function delpurchase(Request $request, ?int $prid = null): JsonResponse
+    {
+        if ($prid !== null) {
+            $request->merge(['prid' => $prid]);
+        }
+
+        $validated = $request->validate([
+            'prid' => ['required', 'integer', 'exists:purchase,prid'],
+        ]);
+
+        $updated = Purchase::query()
+            ->where('prid', $validated['prid'])
+            ->update(['isdel' => 1]);
+
+        if ($updated === 0) {
+            return response()->json(['message' => 'Purchase not found'], 404);
+        }
+
+        return response()->json(['message' => 'Purchase deleted successfully'], 200);
     }
 
     public function gstratereport(Request $request): JsonResponse

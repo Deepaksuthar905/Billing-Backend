@@ -33,6 +33,7 @@ class Purchase extends Model
         'igst',
         'payby',
         'refno',
+        'isdel',
     ];
 
     /**
@@ -50,6 +51,7 @@ class Purchase extends Model
             'cgst' => 'decimal:2',
             'sgst' => 'decimal:2',
             'igst' => 'decimal:2',
+            'isdel' => 'integer',
         ];
     }
 

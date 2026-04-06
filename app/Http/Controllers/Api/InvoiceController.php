@@ -50,7 +50,9 @@ class InvoiceController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Invoice::with('party');
+        $query = Invoice::with('party')->where(function ($q) {
+            $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+        });
 
         if ($search = $request->query('search')) {
             $query->where(function ($q) use ($search) {
@@ -90,6 +92,20 @@ class InvoiceController extends Controller
         }
 
         return response()->json(['data' => $data], 200);
+    }
+
+
+    public function delinvoice($id): JsonResponse
+    {
+        $invoice = Invoice::find($id);
+        if (!$invoice) {
+            return response()->json(['message' => 'Invoice not found'], 404);
+        }
+        //isme eek isdel column h jishko 1 krr dena hai
+        $invoice->isdel = 1;
+        $invoice->save();
+
+        return response()->json(['message' => 'Invoice deleted successfully'], 200);
     }
 
     /**

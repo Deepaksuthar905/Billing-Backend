@@ -38,12 +38,35 @@ class ExpenseController extends Controller
         ], 201);
     }
 
+    public function delexpense(Request $request, ?int $exid = null): JsonResponse
+    {
+        if ($exid !== null) {
+            $request->merge(['exid' => $exid]);
+        }
+
+        $validated = $request->validate([
+            'exid' => ['required', 'integer', 'exists:expenses,exid'],
+        ]);
+
+        $updated = Expense::query()
+            ->where('exid', $validated['exid'])
+            ->update(['isdel' => 1]);
+
+        if ($updated === 0) {
+            return response()->json(['message' => 'Expense not found'], 404);
+        }
+
+        return response()->json(['message' => 'Expense deleted successfully'], 200);
+    }
+
     /**
      * Fetch all expenses.
      */
     public function index(): JsonResponse
     {
-        $expenses = Expense::with(['expensesHead', 'partyRelation'])->get();
+        $expenses = Expense::with(['expensesHead', 'partyRelation'])->where(function ($q) {
+            $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+        })->get();
 
         return response()->json([
             'message' => 'Expenses fetched successfully',

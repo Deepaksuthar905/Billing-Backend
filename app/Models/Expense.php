@@ -32,6 +32,7 @@ class Expense extends Model
         'party',
         'payby',
         'refno',
+        'isdel',
     ];
 
     /**
@@ -49,6 +50,7 @@ class Expense extends Model
             'igst' => 'integer',
             'cgst' => 'integer',
             'sgst' => 'integer',
+            'isdel' => 'integer',
         ];
     }
 

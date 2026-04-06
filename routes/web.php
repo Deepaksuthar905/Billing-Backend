@@ -29,14 +29,9 @@ Route::prefix('api')->group(function () {
 
     // ----- Frontend APIs (documentation table) -----
     Route::get('/dashboard', [DashboardController::class, 'index']);
-    // Route::get('/invoices', [InvoiceController::class, 'index']);
-    // Route::post('/invoices', [InvoiceController::class, 'store']);
     Route::get('/sales', [SalesController::class, 'index']);
-    // Route::get('/purchase-orders', [PurchaseController::class, 'index']);
-    // Route::get('/vendors', [VendorController::class, 'index']);
     Route::get('/customers', [PartyController::class, 'index']);
     Route::get('/items', [ItemController::class, 'index']);
-
     Route::post('/parties', [PartyController::class, 'store']);
     Route::get('/gstslabs', [GstslabController::class, 'fetchAll']);
     Route::post('/gstslabs', [GstslabController::class, 'create']);
@@ -59,4 +54,8 @@ Route::prefix('api')->group(function () {
     Route::put('/items/{id}', [ItemController::class, 'update']);
     Route::post('/sync-invoices', [InvoiceController::class, 'sync']);
     Route::get('/gstratereport', [PurchaseController::class, 'gstratereport']);
+    Route::delete('/invoices/{id}', [InvoiceController::class, 'delinvoice']);
+    //Route::post('/delpurchase', [PurchaseController::class, 'delpurchase']);
+    Route::post('/delpurchase/{prid}', [PurchaseController::class, 'delpurchase'])->whereNumber('prid');
+    Route::post('/delexpenses/{exid}', [ExpenseController::class, 'delexpense'])->whereNumber('exid');
 });
