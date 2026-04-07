@@ -35,6 +35,7 @@ class ExpensesHeadController extends Controller
     {
         $paymentByHead = Expense::query()
             ->selectRaw('exhid, COALESCE(SUM(payment), 0) as total_payment')
+            ->where(fn ($q) => $q->whereNull('isdel')->orWhere('isdel', '!=', 1))
             ->groupBy('exhid')
             ->pluck('total_payment', 'exhid');
 

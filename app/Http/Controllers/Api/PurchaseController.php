@@ -70,6 +70,7 @@ class PurchaseController extends Controller
             'sgst' => (float) $p->sgst,
             'state' => $p->state,
             'gst' => (float) $p->gst,
+            'p_inv_no' => $p->p_inv_no,
         ]);
 
         return response()->json(['data' => $data], 200);

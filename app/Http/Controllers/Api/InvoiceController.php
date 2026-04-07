@@ -45,7 +45,7 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Invoices list. Query: search=, status= (paid|pending|all).
+     * Invoices list. Query: from=, to= (Y-m-d), search=, status= (paid|pending|all).
      * Response: data: [ { id, date, customer, amount, gst, status } ]
      */
     public function index(Request $request): JsonResponse
@@ -53,6 +53,11 @@ class InvoiceController extends Controller
         $query = Invoice::with('party')->where(function ($q) {
             $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
         });
+
+        if ($from = $request->query('from')) {
+            $to = $request->query('to', $from);
+            $query->whereBetween('dt', [$from, $to]);
+        }
 
         if ($search = $request->query('search')) {
             $query->where(function ($q) use ($search) {
