@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\PurchaseController;
 use App\Http\Controllers\Api\DashboardController;
 // use App\Http\Controllers\Api\CustomerController;
 // use App\Http\Controllers\Api\VendorController;
+use App\Http\Controllers\Api\LedgerController;
 use App\Http\Controllers\Api\SalesController;
 use Illuminate\Support\Facades\Route;
 
@@ -54,6 +55,7 @@ Route::prefix('api')->group(function () {
     Route::put('/items/{id}', [ItemController::class, 'update']);
     Route::post('/sync-invoices', [InvoiceController::class, 'sync']);
     Route::get('/gstratereport', [PurchaseController::class, 'gstratereport']);
+    Route::post('/ledger', [LedgerController::class, 'index']);
     Route::delete('/invoices/{id}', [InvoiceController::class, 'delinvoice']);
     //Route::post('/delpurchase', [PurchaseController::class, 'delpurchase']);
     Route::post('/delpurchase/{prid}', [PurchaseController::class, 'delpurchase'])->whereNumber('prid');
