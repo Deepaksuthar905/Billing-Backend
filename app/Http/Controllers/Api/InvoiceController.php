@@ -45,6 +45,47 @@ class InvoiceController extends Controller
     }
 
     /**
+     * Single invoice detail by ID.
+     */
+    public function show(int $id): JsonResponse
+    {
+        $inv = Invoice::with(['party', 'invoiceItems'])
+            ->where('invid', $id)
+            ->where(fn ($q) => $q->whereNull('isdel')->orWhere('isdel', '!=', 1))
+            ->first();
+
+        if (! $inv) {
+            return response()->json(['message' => 'Invoice not found'], 404);
+        }
+
+        return response()->json([
+            'data' => [
+                'id'          => $inv->invid,
+                'inv_no'      => $inv->inv_no,
+                'date'        => $inv->dt?->format('Y-m-d'),
+                'customer'    => $inv->party?->partyname,
+                'pid'         => $inv->pid,
+                'addr'        => $inv->addr,
+                'state'       => $inv->state,
+                'amount'      => (float) $inv->payment,
+                'taxable_amt' => (float) $inv->taxable_amt,
+                'gst'         => (float) $inv->gst,
+                'cgst'        => (float) $inv->cgst,
+                'sgst'        => (float) $inv->sgst,
+                'igst'        => (float) $inv->igst,
+                'paytype'     => $inv->paytype,
+                'paynow'      => (float) $inv->paynow,
+                'payby'       => $inv->payby,
+                'refno'       => $inv->refno,
+                'paylater'    => (float) $inv->paylater,
+                'balance'     => (float) $inv->balance,
+                'status'      => ($inv->balance && (float) $inv->balance > 0) ? 'pending' : 'paid',
+                'items'       => $inv->invoiceItems,
+            ],
+        ], 200);
+    }
+
+    /**
      * Invoices list. Query: from=, to= (Y-m-d), search=, status= (paid|pending|all).
      * Response: data: [ { id, date, customer, amount, gst, status } ]
      */

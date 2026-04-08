@@ -42,6 +42,7 @@ Route::prefix('api')->group(function () {
     Route::get('/items', [ItemController::class, 'index']);
     Route::post('/invoices', [InvoiceController::class, 'store']);
     Route::get('/invoices', [InvoiceController::class, 'index']);
+    Route::get('/invoices/{id}', [InvoiceController::class, 'show'])->whereNumber('id');
     Route::post('/pay-in', [PayInController::class, 'store']);
     Route::get('/pay-in', [PayInController::class, 'index']);
     Route::post('/invoice-items', [InvoiceItemController::class, 'store']);
@@ -55,6 +56,7 @@ Route::prefix('api')->group(function () {
     Route::put('/items/{id}', [ItemController::class, 'update']);
     Route::post('/sync-invoices', [InvoiceController::class, 'sync']);
     Route::get('/gstratereport', [PurchaseController::class, 'gstratereport']);
+    Route::post('/expensereport', [PurchaseController::class, 'expensereport']);
     Route::post('/ledger', [LedgerController::class, 'index']);
     Route::delete('/invoices/{id}', [InvoiceController::class, 'delinvoice']);
     //Route::post('/delpurchase', [PurchaseController::class, 'delpurchase']);

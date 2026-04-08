@@ -132,4 +132,101 @@ class PurchaseController extends Controller
             'sgstsales' => $totalSgst3,
         ]], 200);
     }
+
+    /**
+     * Expense Report: purchases + expenses combined, with date filter.
+     * Query: from=Y-m-d, to=Y-m-d (both optional)
+     *
+     * type: 'purchase' | 'expense'
+     */
+    public function expensereport(Request $request): JsonResponse
+    {
+        $from = $request->query('from');
+        $to   = $request->query('to');
+
+        $notDeleted = fn ($q) => $q->where(function ($q2) {
+            $q2->whereNull('isdel')->orWhere('isdel', '!=', 1);
+        });
+
+        // ---- Purchases -------------------------------------------------------
+        $purchaseQuery = Purchase::with(['party', 'item', 'payBy'])
+            ->tap($notDeleted);
+
+        if ($from && $to) {
+            $purchaseQuery->whereBetween('dt', [$from, $to]);
+        } elseif ($from) {
+            $purchaseQuery->whereDate('dt', '>=', $from);
+        } elseif ($to) {
+            $purchaseQuery->whereDate('dt', '<=', $to);
+        }
+
+        $purchases = $purchaseQuery->orderByDesc('dt')->get()->map(fn ($p) => [
+            'type'        => 'purchase',
+            'id'          => $p->prid,
+            'date'        => $p->dt?->format('Y-m-d'),
+            'inv_no'      => $p->p_inv_no,
+            'party_name'  => $p->party?->partyname ?? '-',
+            'item_name'   => $p->item?->name ?? '-',
+            'description' => null,
+            'payment'     => (float) $p->payment,
+            'taxable_amt' => (float) $p->taxable_amt,
+            'gst'         => (float) $p->gst,
+            'cgst'        => (float) $p->cgst,
+            'sgst'        => (float) $p->sgst,
+            'igst'        => (float) $p->igst,
+            'payby'       => $p->payBy?->name ?? ($p->payby == 1 ? 'Bank' : 'Cash'),
+            'refno'       => $p->refno,
+            'state'       => $p->state,
+        ]);
+
+        // ---- Expenses --------------------------------------------------------
+        $expenseQuery = Expense::with(['expensesHead', 'partyRelation'])
+            ->tap($notDeleted);
+
+        if ($from && $to) {
+            $expenseQuery->whereBetween('dt', [$from, $to]);
+        } elseif ($from) {
+            $expenseQuery->whereDate('dt', '>=', $from);
+        } elseif ($to) {
+            $expenseQuery->whereDate('dt', '<=', $to);
+        }
+
+        $expenses = $expenseQuery->orderByDesc('dt')->get()->map(fn ($e) => [
+            'type'        => 'expense',
+            'id'          => $e->exid,
+            'date'        => $e->dt?->format('Y-m-d'),
+            'inv_no'      => (string) ($e->receipt_no ?? '-'),
+            'party_name'  => $e->partyRelation?->partyname ?? '-',
+            'item_name'   => null,
+            'description' => $e->description ?? ($e->expensesHead?->name ?? '-'),
+            'payment'     => (float) $e->payment,
+            'taxable_amt' => (float) $e->taxable_amt,
+            'gst'         => 0.0,
+            'cgst'        => (float) $e->cgst,
+            'sgst'        => (float) $e->sgst,
+            'igst'        => (float) $e->igst,
+            'payby'       => $e->payby == 1 ? 'Bank' : 'Cash',
+            'refno'       => $e->refno,
+            'state'       => null,
+        ]);
+
+        // ---- Merge & sort ----------------------------------------------------
+        $all = $purchases->concat($expenses)->sortByDesc('date')->values();
+
+        $summary = [
+            'total_payment'     => round($all->sum('payment'), 2),
+            'total_taxable_amt' => round($all->sum('taxable_amt'), 2),
+            'total_cgst'        => round($all->sum('cgst'), 2),
+            'total_sgst'        => round($all->sum('sgst'), 2),
+            'total_igst'        => round($all->sum('igst'), 2),
+            'total_gst'         => round($all->sum('gst'), 2),
+        ];
+
+        return response()->json([
+            'from'    => $from,
+            'to'      => $to,
+            'summary' => $summary,
+            'data'    => $all,
+        ], 200);
+    }
 }
