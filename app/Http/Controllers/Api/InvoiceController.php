@@ -222,7 +222,7 @@ class InvoiceController extends Controller
                 'inv_no' => $record['invoice'] ?? null,
                 'dt' => $record['dt'] ?? now()->format('Y-m-d'),
                 'state' => $record['state'] ?? null,
-                'addr' => $record['addr'] ?? $record['address'] ?? null,
+                'addr' => $record['addr'] ?? $record['city'] ?? null,
                 'gst' => (float) ($record['gstext'] ?? 0),
                 'payment' => (float) ($record['amt'] ?? 0),
                 'cgst' => 0,
@@ -234,6 +234,7 @@ class InvoiceController extends Controller
                 'refno' => $refNo,
                 'paylater' => 0,
                 'balance' => 0,
+                'billing_name' => $record['billing_name'] ?? null,
             ]);
             $invoicesCreated++;
         }
