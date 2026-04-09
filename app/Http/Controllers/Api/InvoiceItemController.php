@@ -40,7 +40,7 @@ class InvoiceItemController extends Controller
      */
     public function index(): JsonResponse
     {
-        $invoiceItems = InvoiceItem::with(['invoice', 'item'])->get();
+        $invoiceItems = InvoiceItem::all();
 
         return response()->json([
             'message' => 'Invoice items fetched successfully',

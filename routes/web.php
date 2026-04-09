@@ -11,8 +11,6 @@ use App\Http\Controllers\Api\ExpensesHeadController;
 use App\Http\Controllers\Api\ExpenseController;
 use App\Http\Controllers\Api\PurchaseController;
 use App\Http\Controllers\Api\DashboardController;
-// use App\Http\Controllers\Api\CustomerController;
-// use App\Http\Controllers\Api\VendorController;
 use App\Http\Controllers\Api\LedgerController;
 use App\Http\Controllers\Api\SalesController;
 use Illuminate\Support\Facades\Route;
@@ -43,6 +41,7 @@ Route::prefix('api')->group(function () {
     Route::post('/invoices', [InvoiceController::class, 'store']);
     Route::get('/invoices', [InvoiceController::class, 'index']);
     Route::get('/invoices/{id}', [InvoiceController::class, 'show'])->whereNumber('id');
+    Route::put('/invoices/{id}', [InvoiceController::class, 'update'])->whereNumber('id');
     Route::post('/pay-in', [PayInController::class, 'store']);
     Route::get('/pay-in', [PayInController::class, 'index']);
     Route::post('/invoice-items', [InvoiceItemController::class, 'store']);

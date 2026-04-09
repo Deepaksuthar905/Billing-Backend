@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
+use App\Models\InvoiceItem;
 use App\Models\Party;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -12,35 +13,62 @@ use Illuminate\Support\Facades\Log;
 class InvoiceController extends Controller
 {
     /**
-     * Create a new invoice.
+     * Map incoming item payload fields → invoice_item table columns.
+     */
+    private function mapItem(array $item, int $invId): array
+    {
+        return [
+            'inv_id'       => $invId,
+            'item_id'      => $item['item_id']      ?? null,
+            'hsnocde'      => $item['hsn_code']      ?? $item['hsnocde'] ?? null,
+            'description'  => $item['description']  ?? null,
+            'rate'         => $item['price']         ?? $item['rate']    ?? 0,
+            'qty'          => $item['qty']           ?? 0,
+            'payment'      => $item['amount']        ?? $item['payment'] ?? 0,
+            'with_without' => $item['with_without']  ?? 0,
+            'gst'          => $item['tax_pct']       ?? $item['gst']     ?? 0,
+            'gst_amt'      => $item['tax_amt']       ?? $item['gst_amt'] ?? 0,
+        ];
+    }
+
+    /**
+     * Create a new invoice (with optional items[]).
      */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'inv_no' => ['nullable', 'string', 'max:100'],
-            'dt' => ['nullable', 'date'],
-            'state' => ['nullable', 'string', 'max:100'],
-            'addr' => ['nullable', 'string'],
-            'pid' => ['required', 'integer', 'exists:party,pid'],
-            'gst' => ['nullable', 'numeric', 'min:0'],
-            'payment' => ['nullable', 'numeric', 'min:0'],
+            'inv_no'      => ['nullable', 'string', 'max:100'],
+            'dt'          => ['nullable', 'date'],
+            'state'       => ['nullable', 'string', 'max:100'],
+            'addr'        => ['nullable', 'string'],
+            'pid'         => ['required', 'integer', 'exists:party,pid'],
+            'gst'         => ['nullable', 'numeric', 'min:0'],
+            'payment'     => ['nullable', 'numeric', 'min:0'],
             'taxable_amt' => ['nullable', 'numeric', 'min:0'],
-            'cgst' => ['nullable', 'numeric', 'min:0'],
-            'sgst' => ['nullable', 'numeric', 'min:0'],
-            'igst' => ['nullable', 'numeric', 'min:0'],
-            'paytype' => ['required', 'integer', 'in:0,1'],
-            'paynow' => ['nullable', 'numeric', 'min:0'],
-            'payby' => ['nullable', 'integer', 'exists:pay_by,pbid'],
-            'refno' => ['nullable', 'string', 'max:100'],
-            'paylater' => ['nullable', 'numeric', 'min:0'],
-            'balance' => ['nullable', 'numeric'],
+            'cgst'        => ['nullable', 'numeric', 'min:0'],
+            'sgst'        => ['nullable', 'numeric', 'min:0'],
+            'igst'        => ['nullable', 'numeric', 'min:0'],
+            'paytype'     => ['required', 'integer', 'in:0,1'],
+            'paynow'      => ['nullable', 'numeric', 'min:0'],
+            'payby'       => ['nullable', 'integer', 'exists:pay_by,pbid'],
+            'refno'       => ['nullable', 'string', 'max:100'],
+            'paylater'    => ['nullable', 'numeric', 'min:0'],
+            'balance'     => ['nullable', 'numeric'],
+            'items'       => ['nullable', 'array'],
+            'items.*'     => ['array'],
         ]);
 
         $invoice = Invoice::create($validated);
 
+        // Save items if provided
+        if (! empty($validated['items'])) {
+            $rows = array_map(fn ($item) => $this->mapItem($item, $invoice->invid), $validated['items']);
+            InvoiceItem::insert($rows);
+        }
+
         return response()->json([
             'message' => 'Invoice created successfully',
-            'data' => $invoice,
+            'data'    => $invoice->load('invoiceItems'),
         ], 201);
     }
 
@@ -82,6 +110,59 @@ class InvoiceController extends Controller
                 'status'      => ($inv->balance && (float) $inv->balance > 0) ? 'pending' : 'paid',
                 'items'       => $inv->invoiceItems,
             ],
+        ], 200);
+    }
+
+    /**
+     * Update an existing invoice by ID.
+     * PUT /api/invoices/{id}
+     */
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $invoice = Invoice::where('invid', $id)
+            ->where(fn ($q) => $q->whereNull('isdel')->orWhere('isdel', '!=', 1))
+            ->first();
+
+        if (! $invoice) {
+            return response()->json(['message' => 'Invoice not found'], 404);
+        }
+
+        $validated = $request->validate([
+            'inv_no'      => ['nullable', 'string', 'max:100'],
+            'dt'          => ['nullable', 'date'],
+            'state'       => ['nullable', 'string', 'max:100'],
+            'addr'        => ['nullable', 'string'],
+            'pid'         => ['nullable', 'integer', 'exists:party,pid'],
+            'gst'         => ['nullable', 'numeric', 'min:0'],
+            'payment'     => ['nullable', 'numeric', 'min:0'],
+            'taxable_amt' => ['nullable', 'numeric', 'min:0'],
+            'cgst'        => ['nullable', 'numeric', 'min:0'],
+            'sgst'        => ['nullable', 'numeric', 'min:0'],
+            'igst'        => ['nullable', 'numeric', 'min:0'],
+            'paytype'     => ['nullable', 'integer', 'in:0,1'],
+            'paynow'      => ['nullable', 'numeric', 'min:0'],
+            'payby'       => ['nullable', 'integer', 'exists:pay_by,pbid'],
+            'refno'       => ['nullable', 'string', 'max:100'],
+            'paylater'    => ['nullable', 'numeric', 'min:0'],
+            'balance'     => ['nullable', 'numeric'],
+            'items'       => ['nullable', 'array'],
+            'items.*'     => ['array'],
+        ]);
+
+        $invoice->update($validated);
+
+        // Replace items if provided
+        if (array_key_exists('items', $validated)) {
+            InvoiceItem::where('inv_id', $invoice->invid)->delete();
+            if (! empty($validated['items'])) {
+                $rows = array_map(fn ($item) => $this->mapItem($item, $invoice->invid), $validated['items']);
+                InvoiceItem::insert($rows);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Invoice updated successfully',
+            'data'    => $invoice->fresh(['party', 'invoiceItems']),
         ], 200);
     }
 
@@ -171,7 +252,6 @@ class InvoiceController extends Controller
         if (! $response->successful()) {
             return response()->json(['message' => 'External API request failed', 'status' => $response->status()], 502);
         }
-        echo $response->body();
 
         $body = $response->json();
         // getamtlist returns data.list
