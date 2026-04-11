@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Invoice;
 use App\Models\InvoiceItem;
+use App\Models\Item;
 use App\Models\Party;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -29,6 +30,116 @@ class InvoiceController extends Controller
             'gst'          => $item['tax_pct']       ?? $item['gst']     ?? 0,
             'gst_amt'      => $item['tax_amt']       ?? $item['gst_amt'] ?? 0,
         ];
+    }
+
+    /**
+     * Build line-item rows from getamtlist record (inv_item, info, or default).
+     *
+     * - inv_item: JSON array, array, plain string (e.g. "Registration payment"), or null
+     * - info: e.g. "2000+2000+1000" → one invoice_item per numeric part
+     * - if nothing else: one line with full invoice amount
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function collectSyncInvoiceItemLines(array $record, float $invoiceAmt): array
+    {
+        $raw = $record['inv_item'] ?? $record['inv_items'] ?? null;
+
+        if (is_array($raw)) {
+            return array_is_list($raw) ? $raw : [$raw];
+        }
+
+        if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                return array_is_list($decoded) ? $decoded : [$decoded];
+            }
+
+            // Plain text label (API often sends "Registration payment" not JSON)
+            return [[
+                'description' => trim($raw),
+                'payment'     => $invoiceAmt,
+                'qty'         => 1,
+                'rate'        => $invoiceAmt,
+            ]];
+        }
+
+        // inv_item null / empty → split info "2000+2000+1000"
+        $info = $record['info'] ?? null;
+        if (is_string($info) && $info !== '' && str_contains($info, '+')) {
+            $parts = array_map('trim', explode('+', $info));
+            $nums = [];
+            foreach ($parts as $p) {
+                if ($p !== '' && is_numeric($p)) {
+                    $nums[] = (float) $p;
+                }
+            }
+            if ($nums !== []) {
+                $lines = [];
+                foreach ($nums as $i => $partAmt) {
+                    $lines[] = [
+                        'description' => 'Part '.($i + 1),
+                        'payment'     => $partAmt,
+                        'qty'         => 1,
+                        'rate'        => $partAmt,
+                    ];
+                }
+
+                return $lines;
+            }
+        }
+
+        // Default: single line = full invoice total
+        return [[
+            'description' => 'Invoice amount',
+            'payment'     => $invoiceAmt,
+            'qty'         => 1,
+            'rate'        => $invoiceAmt,
+        ]];
+    }
+
+    /**
+     * Map one line from superauction → invoice_item row (sync).
+     */
+    private function mapSyncInvItemRow(array $line, int $invId, float $invoiceAmtFallback, int $lineCountInBatch = 1): array
+    {
+        $pay = (float) ($line['amount'] ?? $line['payment'] ?? $line['amt'] ?? $line['total'] ?? 0);
+        if ($pay <= 0 && $invoiceAmtFallback > 0 && $lineCountInBatch === 1) {
+            $pay = $invoiceAmtFallback;
+        }
+
+        $qty = (float) ($line['qty'] ?? $line['quantity'] ?? 0);
+        if ($qty <= 0) {
+            $qty = 1;
+        }
+
+        $rate = (float) ($line['price'] ?? $line['rate'] ?? 0);
+        if ($rate <= 0 && $pay > 0) {
+            $rate = $qty > 0 ? $pay / $qty : $pay;
+        }
+
+        $row = [
+            'inv_id'       => $invId,
+            'item_id'      => isset($line['item_id']) ? (int) $line['item_id'] : null,
+            'hsnocde'      => $line['hsn_code'] ?? $line['hsnocde'] ?? $line['hsncode'] ?? null,
+            'description'  => $line['description'] ?? (isset($line['item']) ? (string) $line['item'] : null),
+            'rate'         => $rate,
+            'qty'          => $qty,
+            'payment'      => $pay > 0 ? $pay : ($rate * $qty),
+            'with_without' => (int) ($line['with_without'] ?? 0),
+            'gst'          => (float) ($line['tax_pct'] ?? $line['gst'] ?? $line['gst_pct'] ?? 0),
+            'gst_amt'      => (float) ($line['tax_amt'] ?? $line['gst_amt'] ?? 0),
+        ];
+
+        $iid = $row['item_id'];
+        if ($iid === null || ! Item::where('item_id', $iid)->exists()) {
+            $fallback = Item::query()->orderBy('item_id')->value('item_id');
+            if ($fallback !== null) {
+                $row['item_id'] = (int) $fallback;
+            }
+        }
+
+        return $row;
     }
 
     /**
@@ -297,25 +408,43 @@ class InvoiceController extends Controller
                 continue;
             }
 
-            Invoice::create([
+            $invoiceAmt = (float) ($record['amt'] ?? 0);
+
+            $invoice = Invoice::create([
                 'pid' => $party->pid,
-                'inv_no' => $record['invoice'] ?? null,
+                'inv_no' => $record['invoice'] !== null && $record['invoice'] !== '' ? (string) $record['invoice'] : null,
                 'dt' => $record['dt'] ?? now()->format('Y-m-d'),
                 'state' => $record['state'] ?? null,
                 'addr' => $record['addr'] ?? $record['city'] ?? null,
                 'gst' => (float) ($record['gstext'] ?? 0),
-                'payment' => (float) ($record['amt'] ?? 0),
+                'payment' => $invoiceAmt,
                 'cgst' => 0,
                 'sgst' => 0,
                 'igst' => 0,
                 'paytype' => 0,
-                'paynow' => (float) ($record['amt'] ?? 0),
+                'paynow' => $invoiceAmt,
                 'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
                 'refno' => $refNo,
                 'paylater' => 0,
                 'balance' => 0,
-                'billing_name' => $record['billing_name'] ?? null,
             ]);
+
+            $lines = $this->collectSyncInvoiceItemLines($record, $invoiceAmt);
+            $n = count($lines);
+            $rows = [];
+            foreach ($lines as $line) {
+                if (! is_array($line)) {
+                    continue;
+                }
+                $mapped = $this->mapSyncInvItemRow($line, $invoice->invid, $invoiceAmt, $n);
+                if ($mapped['item_id'] !== null) {
+                    $rows[] = $mapped;
+                }
+            }
+            if ($rows !== []) {
+                InvoiceItem::insert($rows);
+            }
+
             $invoicesCreated++;
         }
 
