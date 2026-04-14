@@ -404,7 +404,10 @@ class InvoiceController extends Controller
             $refNo = $refNo !== '' ? $refNo : null;
 
             // Avoid creating duplicate invoice entries for same refno.
-            if ($refNo !== null && Invoice::where('refno', $refNo)->exists()) {
+            // If an invoice was soft-deleted (isdel=1), allow re-sync for same refno.
+            if ($refNo !== null && Invoice::where('refno', $refNo)->where(function ($q) {
+                $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+            })->exists()) {
                 continue;
             }
 
