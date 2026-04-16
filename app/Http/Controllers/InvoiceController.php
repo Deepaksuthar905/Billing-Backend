@@ -143,27 +143,6 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Align invoice header totals with line items: payment / paynow = sum(invoice_item.payment).
-     * If there are no line items, use $fallbackAmt (API amt).
-     */
-    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt): void
-    {
-        $sum = (float) InvoiceItem::where('inv_id', $invoice->invid)->sum('payment');
-        if ($sum > 0) {
-            $invoice->payment = $sum;
-            $invoice->paynow = $sum;
-            $invoice->save();
-
-            return;
-        }
-        if ($fallbackAmt > 0) {
-            $invoice->payment = $fallbackAmt;
-            $invoice->paynow = $fallbackAmt;
-            $invoice->save();
-        }
-    }
-
-    /**
      * Create a new invoice (with optional items[]).
      */
     public function store(Request $request): JsonResponse
@@ -391,8 +370,6 @@ class InvoiceController extends Controller
 
         $partiesCreated = 0;
         $invoicesCreated = 0;
-        $invoicesMatched = 0;
-        $invoiceItemsCreated = 0;
 
         foreach ($data as $record) {
             $cid = $record['cid'] ?? null;
@@ -426,57 +403,34 @@ class InvoiceController extends Controller
             $refNo = isset($record['amid']) ? trim((string) $record['amid']) : null;
             $refNo = $refNo !== '' ? $refNo : null;
 
-            $invNo = isset($record['invoice']) && $record['invoice'] !== '' ? (string) $record['invoice'] : null;
-            $invDt = isset($record['dt']) && $record['dt'] !== '' ? (string) $record['dt'] : now()->format('Y-m-d');
-
-            // Match existing invoice (not deleted) in this order:
-            // 1) by refno (amid) — strict external unique id
-            // 2) by inv_no + dt + pid — prevents duplicate invoice rows when invoice number repeats
-            $existingInvoice = null;
-            if ($refNo !== null) {
-                $existingInvoice = Invoice::where('refno', $refNo)
-                    ->where(function ($q) {
-                        $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
-                    })
-                    ->first();
-            }
-            if (! $existingInvoice && $invNo !== null) {
-                $existingInvoice = Invoice::where('pid', $party->pid)
-                    ->where('inv_no', $invNo)
-                    ->where('dt', $invDt)
-                    ->where(function ($q) {
-                        $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
-                    })
-                    ->first();
+            // Avoid creating duplicate invoice entries for same refno.
+            // If an invoice was soft-deleted (isdel=1), allow re-sync for same refno.
+            if ($refNo !== null && Invoice::where('refno', $refNo)->where(function ($q) {
+                $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+            })->exists()) {
+                continue;
             }
 
             $invoiceAmt = (float) ($record['amt'] ?? 0);
 
-            if ($existingInvoice) {
-                $invoice = $existingInvoice;
-                $invoicesMatched++;
-            } else {
-                $invoice = Invoice::create([
-                    'pid' => $party->pid,
-                    'inv_no' => $invNo,
-                    'dt' => $invDt,
-                    'state' => $record['state'] ?? null,
-                    'addr' => $record['addr'] ?? $record['city'] ?? null,
-                    'gst' => (float) ($record['gstext'] ?? 0),
-                    'payment' => $invoiceAmt,
-                    'cgst' => 0,
-                    'sgst' => 0,
-                    'igst' => 0,
-                    'paytype' => 0,
-                    'paynow' => $invoiceAmt,
-                    'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
-                    'refno' => $refNo,
-                    'paylater' => 0,
-                    'balance' => 0,
-                ]);
-
-                $invoicesCreated++;
-            }
+            $invoice = Invoice::create([
+                'pid' => $party->pid,
+                'inv_no' => $record['invoice'] !== null && $record['invoice'] !== '' ? (string) $record['invoice'] : null,
+                'dt' => $record['dt'] ?? now()->format('Y-m-d'),
+                'state' => $record['state'] ?? null,
+                'addr' => $record['addr'] ?? $record['city'] ?? null,
+                'gst' => (float) ($record['gstext'] ?? 0),
+                'payment' => $invoiceAmt,
+                'cgst' => 0,
+                'sgst' => 0,
+                'igst' => 0,
+                'paytype' => 0,
+                'paynow' => $invoiceAmt,
+                'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
+                'refno' => $refNo,
+                'paylater' => 0,
+                'balance' => 0,
+            ]);
 
             $lines = $this->collectSyncInvoiceItemLines($record, $invoiceAmt);
             $n = count($lines);
@@ -491,36 +445,16 @@ class InvoiceController extends Controller
                 }
             }
             if ($rows !== []) {
-                // Insert invoice items, but avoid exact duplicates on re-sync.
-                $toInsert = [];
-                foreach ($rows as $r) {
-                    $dup = InvoiceItem::where('inv_id', $r['inv_id'])
-                        ->where('item_id', $r['item_id'])
-                        ->where('description', $r['description'])
-                        ->where('rate', $r['rate'])
-                        ->where('qty', $r['qty'])
-                        ->where('payment', $r['payment'])
-                        ->exists();
-                    if (! $dup) {
-                        $toInsert[] = $r;
-                    }
-                }
-
-                if ($toInsert !== []) {
-                    InvoiceItem::insert($toInsert);
-                    $invoiceItemsCreated += count($toInsert);
-                }
+                InvoiceItem::insert($rows);
             }
 
-            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt);
+            $invoicesCreated++;
         }
 
         return response()->json([
             'message' => 'Sync successful',
             'parties_created' => $partiesCreated,
             'invoices_created' => $invoicesCreated,
-            'invoices_matched' => $invoicesMatched,
-            'invoice_items_created' => $invoiceItemsCreated,
         ], 200);
     }
 }
