@@ -24,6 +24,8 @@ class PurchaseController extends Controller
             'payment' => ['nullable', 'numeric', 'min:0'],
             'taxable_amt' => ['nullable', 'numeric', 'min:0'],
             'party_id' => ['nullable', 'integer', 'exists:party,pid'],
+            // Frontend sends prhid; must be validated or it is stripped from $validated
+            'prhid' => ['nullable', 'integer', 'exists:party,pid'],
             'gst' => ['nullable', 'numeric', 'min:0'],
             'cgst' => ['nullable', 'numeric', 'min:0'],
             'sgst' => ['nullable', 'numeric', 'min:0'],
@@ -32,11 +34,19 @@ class PurchaseController extends Controller
             'refno' => ['nullable', 'string', 'max:100'],
         ]);
 
+        if (
+            (! array_key_exists('party_id', $validated) || $validated['party_id'] === null || $validated['party_id'] === '')
+            && isset($validated['prhid'])
+        ) {
+            $validated['party_id'] = (int) $validated['prhid'];
+        }
+        unset($validated['prhid']);
+
         $purchase = Purchase::create($validated);
 
         return response()->json([
             'message' => 'Purchase created successfully',
-            'data' => $purchase,
+            'data' => $purchase,                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
         ], 201);
     }
 
@@ -65,12 +75,14 @@ class PurchaseController extends Controller
             'amount' => (float) $p->payment,
             'status' => 'completed',
             'taxable_amt' => (float) $p->taxable_amt,
-            'igst' => (float) $p->igst,
-            'cgst' => (float) $p->cgst,
-            'sgst' => (float) $p->sgst,
-            'state' => $p->state,
+            'item_name' => $p->item?->name,
+            // 'igst' => (float) $p->igst,
+            // 'cgst' => (float) $p->cgst,
+            // 'sgst' => (float) $p->sgst,
+            // 'state' => $p->state,
             'gst' => (float) $p->gst,
             'p_inv_no' => $p->p_inv_no,
+
         ]);
 
         return response()->json(['data' => $data], 200);

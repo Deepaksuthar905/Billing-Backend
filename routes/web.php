@@ -50,6 +50,7 @@ Route::prefix('api')->group(function () {
     Route::get('/expenses-heads', [ExpensesHeadController::class, 'index']);
     Route::post('/expenses', [ExpenseController::class, 'store']);
     Route::get('/expenses', [ExpenseController::class, 'index']);
+    Route::put('/expenses/{id}', [ExpenseController::class, 'update'])->whereNumber('id');
     Route::post('/purchases', [PurchaseController::class, 'store']);
     Route::get('/purchases', [PurchaseController::class, 'index']);
     Route::put('/items/{id}', [ItemController::class, 'update']);

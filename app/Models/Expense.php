@@ -61,7 +61,11 @@ class Expense extends Model
     {
         static::creating(function (Expense $expense) {
             if (empty($expense->receipt_no)) {
-                $expense->receipt_no = (int) static::max('receipt_no') + 1;
+                $expense->receipt_no = (int) static::query()
+                    ->where(function ($q) {
+                        $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+                    })
+                    ->max('receipt_no') + 1;
             }
         });
     }
