@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Party;
+use App\Models\PayBy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -44,18 +45,26 @@ class PartyController extends Controller
     public function index(Request $request): JsonResponse
     {
         $query = Party::query();
+        $payby = null;
 
         if ($request->filled('prtytyp')) {
             $validated = $request->validate([
                 'prtytyp' => ['integer', 'in:0,1'],
             ]);
             $query->where('prtytyp', (int) $validated['prtytyp']);
+            // prtytyp filter ke saath pay_by list bhi return karni hai
+            $payby = PayBy::all();
         }
 
         $parties = $query->get();
-        return response()->json([
+        $payload = [
             'message' => 'Parties fetched successfully',
             'data' => $parties,
-        ], 200);
+        ];
+        if ($payby !== null) {
+            $payload['payby'] = $payby;
+        }
+
+        return response()->json($payload, 200);
     }
 }
