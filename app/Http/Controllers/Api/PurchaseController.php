@@ -46,8 +46,57 @@ class PurchaseController extends Controller
 
         return response()->json([
             'message' => 'Purchase created successfully',
-            'data' => $purchase,                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+            'data' => $purchase,
         ], 201);
+    }
+
+    /**
+     * Update an existing purchase. PUT /api/purchases/{id} (id = prid).
+     */
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $purchase = Purchase::query()
+            ->where('prid', $id)
+            ->where(function ($q) {
+                $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+            })
+            ->first();
+
+        if (! $purchase) {
+            return response()->json(['message' => 'Purchase not found'], 404);
+        }
+
+        $validated = $request->validate([
+            'item_id' => ['sometimes', 'integer', 'exists:items,item_id'],
+            'p_inv_no' => ['nullable', 'string', 'max:100'],
+            'dt' => ['nullable', 'date'],
+            'state' => ['nullable', 'string', 'max:100'],
+            'payment' => ['nullable', 'numeric', 'min:0'],
+            'taxable_amt' => ['nullable', 'numeric', 'min:0'],
+            'party_id' => ['nullable', 'integer', 'exists:party,pid'],
+            'prhid' => ['nullable', 'integer', 'exists:party,pid'],
+            'gst' => ['nullable', 'numeric', 'min:0'],
+            'cgst' => ['nullable', 'numeric', 'min:0'],
+            'sgst' => ['nullable', 'numeric', 'min:0'],
+            'igst' => ['nullable', 'numeric', 'min:0'],
+            'payby' => ['nullable', 'integer', 'exists:pay_by,pbid'],
+            'refno' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        if (
+            (! array_key_exists('party_id', $validated) || $validated['party_id'] === null || $validated['party_id'] === '')
+            && isset($validated['prhid'])
+        ) {
+            $validated['party_id'] = (int) $validated['prhid'];
+        }
+        unset($validated['prhid']);
+
+        $purchase->update($validated);
+
+        return response()->json([
+            'message' => 'Purchase updated successfully',
+            'data' => $purchase->fresh(['party', 'payBy', 'item']),
+        ], 200);
     }
 
     /**
@@ -75,7 +124,10 @@ class PurchaseController extends Controller
             'amount' => (float) $p->payment,
             'status' => 'completed',
             'taxable_amt' => (float) $p->taxable_amt,
-            'item_name' => $p->item?->name,
+            'items' => $p->item?->item_name,
+            'item_id' => $p->item,
+            'payby' => $p->payBy?->pbid,
+            'refno' => $p->refno,
             // 'igst' => (float) $p->igst,
             // 'cgst' => (float) $p->cgst,
             // 'sgst' => (float) $p->sgst,

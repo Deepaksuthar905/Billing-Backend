@@ -53,6 +53,7 @@ Route::prefix('api')->group(function () {
     Route::put('/expenses/{id}', [ExpenseController::class, 'update'])->whereNumber('id');
     Route::post('/purchases', [PurchaseController::class, 'store']);
     Route::get('/purchases', [PurchaseController::class, 'index']);
+    Route::put('/purchases/{id}', [PurchaseController::class, 'update'])->whereNumber('id');
     Route::put('/items/{id}', [ItemController::class, 'update']);
     Route::post('/sync-invoices', [InvoiceController::class, 'sync']);
     Route::get('/gstratereport', [PurchaseController::class, 'gstratereport']);
