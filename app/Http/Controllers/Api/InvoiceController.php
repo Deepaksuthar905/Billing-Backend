@@ -451,6 +451,18 @@ class InvoiceController extends Controller
             }
 
             $invoiceAmt = (float) ($record['amt'] ?? 0);
+            //agr state Rajasthan hai toh cgst, sgst, igst 0 krr dena hai
+            if($record['state'] === 'Rajasthan') {
+                //9 % cgst and 9 % sgst invoiceAmt main included h uski value ko nikalna hai
+                $cgst = $invoiceAmt * 0.09;
+                $sgst = $invoiceAmt * 0.09;
+                $igst = 0;
+            } else {
+                //18 % igst invoiceAmt main included h uski value ko nikalna hai
+                $igst = $invoiceAmt * 0.18;
+                $cgst = 0;
+                $sgst = 0;
+            }
 
             if ($existingInvoice) {
                 $invoice = $existingInvoice;
@@ -464,9 +476,9 @@ class InvoiceController extends Controller
                     'addr' => $record['addr'] ?? $record['city'] ?? null,
                     'gst' => (float) ($record['gstext'] ?? 0),
                     'payment' => $invoiceAmt,
-                    'cgst' => 0,
-                    'sgst' => 0,
-                    'igst' => 0,
+                    'cgst' => $cgst,
+                    'sgst' => $sgst,
+                    'igst' => $igst,
                     'paytype' => 0,
                     'paynow' => $invoiceAmt,
                     'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
