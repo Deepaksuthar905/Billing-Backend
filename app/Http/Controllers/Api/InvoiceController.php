@@ -483,6 +483,7 @@ class InvoiceController extends Controller
                     'paynow' => $invoiceAmt,
                     'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
                     'refno' => $refNo,
+                    'taxable_amt' => $invoiceAmt - $cgst - $sgst - $igst,
                     'paylater' => 0,
                     'balance' => 0,
                 ]);

@@ -7,6 +7,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Str;
 
 class User extends Authenticatable
 {
@@ -32,6 +33,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'api_token',
     ];
 
     /**
@@ -45,5 +47,30 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    /**
+     * Issue a new API token (plain string returned once). Stores SHA-256 hex in api_token.
+     */
+    public function issueApiToken(): string
+    {
+        $plain = Str::random(64);
+        $this->forceFill([
+            'api_token' => hash('sha256', $plain),
+        ])->save();
+
+        return $plain;
+    }
+
+    /**
+     * Resolve user from plain Bearer token value.
+     */
+    public static function findByApiToken(?string $plain): ?self
+    {
+        if ($plain === null || $plain === '') {
+            return null;
+        }
+
+        return static::where('api_token', hash('sha256', $plain))->first();
     }
 }

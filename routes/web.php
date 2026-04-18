@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\PurchaseController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\LedgerController;
 use App\Http\Controllers\Api\SalesController;
+use App\Http\Controllers\Api\AuthController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -25,6 +26,9 @@ Route::get('/', function () {
 |--------------------------------------------------------------------------
 */
 Route::prefix('api')->group(function () {
+
+    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/reglogin', [AuthController::class, 'register']);
 
     // ----- Frontend APIs (documentation table) -----
     Route::get('/dashboard', [DashboardController::class, 'index']);
