@@ -23,6 +23,7 @@ class PartyController extends Controller
             'gst_reg' => ['nullable', 'boolean'],
             'same_state' => ['nullable', 'boolean'],
             'prtytyp' => ['nullable', 'integer', 'in:0,1'],
+            'addr' => ['nullable', 'string', 'max:500'],
         ]);
 
         // Normalize 0/1 to boolean if sent as integer
@@ -66,5 +67,34 @@ class PartyController extends Controller
         }
 
         return response()->json($payload, 200);
+    }
+
+    //edit party
+    public function edit(Request $request, $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'partyname' => ['required', 'string', 'max:255'],
+            'mobno' => ['nullable', 'string', 'max:20'],
+            'cid' => ['nullable', 'string', 'max:50'],
+            'billing_name' => ['nullable', 'string', 'max:255'],
+            'gst_no' => ['nullable', 'string', 'max:50'],
+            'city' => ['nullable', 'string', 'max:100'],
+            'state' => ['nullable', 'string', 'max:100'],
+            'gst_reg' => ['nullable', 'boolean'],
+            'same_state' => ['nullable', 'boolean'],
+            'prtytyp' => ['nullable', 'integer', 'in:0,1'],
+            'addr' => ['nullable', 'string', 'max:500'],
+        ]);
+        $party = Party::find($id);
+        if (!$party) {
+            return response()->json([
+                'message' => 'Party not found',
+            ], 404);
+        }
+        $party->update($validated);
+        return response()->json([
+            'message' => 'Party updated successfully',
+            'data' => $party,
+        ], 200);
     }
 }

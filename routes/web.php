@@ -36,6 +36,7 @@ Route::prefix('api')->group(function () {
     Route::get('/customers', [PartyController::class, 'index']);
     Route::get('/items', [ItemController::class, 'index']);
     Route::post('/parties', [PartyController::class, 'store']);
+    Route::post('/parties/{id}', [PartyController::class, 'edit'])->whereNumber('id');
     Route::get('/gstslabs', [GstslabController::class, 'fetchAll']);
     Route::post('/gstslabs', [GstslabController::class, 'create']);
     Route::post('/pay-by', [PayByController::class, 'store']);
