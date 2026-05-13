@@ -329,6 +329,7 @@ class InvoiceController extends Controller
                 'inv_no' => $inv->inv_no,
                 'date' => $inv->dt?->format('Y-m-d'),
                 'customer' => $inv->party?->partyname,
+                'pid' => $inv->pid,
                 'amount' => (float) $inv->payment,
                 'gst' => (float) $inv->gst,
                 'cgst' => (float) $inv->cgst,
@@ -451,17 +452,17 @@ class InvoiceController extends Controller
             }
 
             $invoiceAmt = (float) ($record['amt'] ?? 0);
-            //agr state Rajasthan hai toh cgst, sgst, igst 0 krr dena hai
-            if($record['state'] === 'Rajasthan') {
-                //9 % cgst and 9 % sgst invoiceAmt main included h uski value ko nikalna hai
-                $cgst = $invoiceAmt * 0.09;
-                $sgst = $invoiceAmt * 0.09;
-                $igst = 0;
+            // 18% GST is included in gross: taxable = gross × 100/118; CGST/SGST/IGST on taxable base.
+            $taxableAmt = $invoiceAmt > 0 ? ($invoiceAmt * 100 / 118) : 0.0;
+
+            if ($record['state'] === 'Rajasthan') {
+                $cgst = $taxableAmt * 0.09;
+                $sgst = $taxableAmt * 0.09;
+                $igst = 0.0;
             } else {
-                //18 % igst invoiceAmt main included h uski value ko nikalna hai
-                $igst = $invoiceAmt * 0.18;
-                $cgst = 0;
-                $sgst = 0;
+                $igst = $taxableAmt * 0.18;
+                $cgst = 0.0;
+                $sgst = 0.0;
             }
 
             if ($existingInvoice) {
@@ -483,7 +484,8 @@ class InvoiceController extends Controller
                     'paynow' => $invoiceAmt,
                     'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
                     'refno' => $refNo,
-                    'taxable_amt' => $invoiceAmt - $cgst - $sgst - $igst,
+                    'taxable_amt' => $taxableAmt,
+                    'gstno' => $record['gstno'] ?? null,
                     'paylater' => 0,
                     'balance' => 0,
                 ]);
