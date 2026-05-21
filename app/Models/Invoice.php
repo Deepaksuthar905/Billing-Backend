@@ -76,4 +76,12 @@ class Invoice extends Model
     {
         return $this->hasMany(InvoiceItem::class, 'inv_id', 'invid');
     }
+
+    /**
+     * Invoice has many PayIn rows (inv_id -> invoice.invid).
+     */
+    public function payIns()
+    {
+        return $this->hasMany(PayIn::class, 'inv_id', 'invid');
+    }
 }

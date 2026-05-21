@@ -143,24 +143,48 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Align invoice header totals with line items: payment / paynow = sum(invoice_item.payment).
-     * If there are no line items, use $fallbackAmt (API amt).
+     * GST 18% included in gross: taxable = gross × 100/118. Rajasthan → CGST+SGST; else IGST.
+     *
+     * @return array{0: float, 1: float, 2: float, 3: float} taxable_amt, cgst, sgst, igst
      */
-    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt): void
+    private function splitInclusiveGst18(float $gross, ?string $state): array
+    {
+        if ($gross <= 0) {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        $taxable = $gross * 100 / 118;
+        if (trim((string) ($state ?? '')) === 'Rajasthan') {
+            return [$taxable, $taxable * 0.09, $taxable * 0.09, 0.0];
+        }
+
+        return [$taxable, 0.0, 0.0, $taxable * 0.18];
+    }
+
+    /**
+     * Align invoice header with line items: gross = sum(invoice_item.payment) when present, else $fallbackAmt.
+     * Recomputes taxable_amt and CGST/SGST/IGST from that gross (18% inclusive).
+     *
+     * @param  string|null  $stateForGst  Prefer current sync row state; falls back to $invoice->state.
+     */
+    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt, ?string $stateForGst = null): void
     {
         $sum = (float) InvoiceItem::where('inv_id', $invoice->invid)->sum('payment');
-        if ($sum > 0) {
-            $invoice->payment = $sum;
-            $invoice->paynow = $sum;
-            $invoice->save();
+        $gross = $sum > 0 ? $sum : $fallbackAmt;
 
+        if ($gross <= 0) {
             return;
         }
-        if ($fallbackAmt > 0) {
-            $invoice->payment = $fallbackAmt;
-            $invoice->paynow = $fallbackAmt;
-            $invoice->save();
-        }
+
+        $state = $stateForGst ?? $invoice->state;
+        [$taxable, $cgst, $sgst, $igst] = $this->splitInclusiveGst18($gross, $state);
+
+        $invoice->payment = $gross;
+        $invoice->paynow = $gross;
+        $invoice->taxable_amt = $taxable;
+        $invoice->cgst = $cgst;
+        $invoice->sgst = $sgst;
+        $invoice->igst = $igst;
+        $invoice->save();
     }
 
     /**
@@ -320,10 +344,22 @@ class InvoiceController extends Controller
             });
         }
 
-        $invoices = $query->orderByDesc('dt')->get();
+        $invoices = $query->withSum('payIns as pay_in_total', 'amount')
+            ->orderByDesc('dt')
+            ->get();
 
         $data = $invoices->map(function ($inv) {
-            $status = ($inv->balance && (float) $inv->balance > 0) ? 'pending' : 'paid';
+            $invoiceBalance = (float) $inv->balance;
+            $payInTotal = (float) ($inv->pay_in_total ?? 0);
+
+            if ($invoiceBalance > 0) {
+                $pendingBalance = max(0, round($invoiceBalance - $payInTotal, 2));
+                $status = $pendingBalance > 0 ? 'pending' : 'paid';
+            } else {
+                $pendingBalance = 0.0;
+                $status = 'paid';
+            }
+
             return [
                 'id' => $inv->invid,
                 'inv_no' => $inv->inv_no,
@@ -340,7 +376,7 @@ class InvoiceController extends Controller
                 'payby' => $inv->payby,
                 'refno' => $inv->refno,
                 'paylater' => (float) $inv->paylater,
-                'balance' => (float) $inv->balance,
+                'balance' => $pendingBalance,
                 'state' => $inv->state,
                 'status' => $status,
             ];
@@ -432,7 +468,7 @@ class InvoiceController extends Controller
 
             // Match existing invoice (not deleted) in this order:
             // 1) by refno (amid) — strict external unique id
-            // 2) by inv_no + dt + pid — prevents duplicate invoice rows when invoice number repeats
+            // 2) by inv_no + pid — same invoice no. for party: one invoice row; new sync rows add items only
             $existingInvoice = null;
             if ($refNo !== null) {
                 $existingInvoice = Invoice::where('refno', $refNo)
@@ -444,26 +480,15 @@ class InvoiceController extends Controller
             if (! $existingInvoice && $invNo !== null) {
                 $existingInvoice = Invoice::where('pid', $party->pid)
                     ->where('inv_no', $invNo)
-                    ->where('dt', $invDt)
                     ->where(function ($q) {
                         $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
                     })
+                    ->orderByDesc('invid')
                     ->first();
             }
 
             $invoiceAmt = (float) ($record['amt'] ?? 0);
-            // 18% GST is included in gross: taxable = gross × 100/118; CGST/SGST/IGST on taxable base.
-            $taxableAmt = $invoiceAmt > 0 ? ($invoiceAmt * 100 / 118) : 0.0;
-
-            if ($record['state'] === 'Rajasthan') {
-                $cgst = $taxableAmt * 0.09;
-                $sgst = $taxableAmt * 0.09;
-                $igst = 0.0;
-            } else {
-                $igst = $taxableAmt * 0.18;
-                $cgst = 0.0;
-                $sgst = 0.0;
-            }
+            [$taxableAmt, $cgst, $sgst, $igst] = $this->splitInclusiveGst18($invoiceAmt, $record['state'] ?? null);
 
             if ($existingInvoice) {
                 $invoice = $existingInvoice;
@@ -527,7 +552,7 @@ class InvoiceController extends Controller
                 }
             }
 
-            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt);
+            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $record['state'] ?? null);
         }
 
         return response()->json([
