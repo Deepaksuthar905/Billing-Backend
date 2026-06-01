@@ -7,6 +7,7 @@ use App\Models\Invoice;
 use App\Models\InvoiceItem;
 use App\Models\Item;
 use App\Models\Party;
+use App\Models\PayBy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -161,6 +162,97 @@ class InvoiceController extends Controller
     }
 
     /**
+     * getamtlist gstext: 0 / empty → 18% GST included in amt; any other value → GST extra on top of amt.
+     */
+    private function isSyncGstIncluded(array $record): bool
+    {
+        if (! array_key_exists('gstext', $record)) {
+            return true;
+        }
+
+        $gstext = $record['gstext'];
+        if ($gstext === null || $gstext === '') {
+            return true;
+        }
+
+        return (float) $gstext === 0.0;
+    }
+
+    /**
+     * @return array{taxable: float, cgst: float, sgst: float, igst: float, gst: float, total: float}
+     */
+    private function computeSyncGstAmounts(float $baseAmt, ?string $state, bool $gstIncluded): array
+    {
+        $zero = ['taxable' => 0.0, 'cgst' => 0.0, 'sgst' => 0.0, 'igst' => 0.0, 'gst' => 0.0, 'total' => 0.0];
+        if ($baseAmt <= 0) {
+            return $zero;
+        }
+
+        if ($gstIncluded) {
+            [$taxable, $cgst, $sgst, $igst] = $this->splitInclusiveGst18($baseAmt, $state);
+
+            return [
+                'taxable' => $taxable,
+                'cgst' => $cgst,
+                'sgst' => $sgst,
+                'igst' => $igst,
+                'gst' => $cgst + $sgst + $igst,
+                'total' => $baseAmt,
+            ];
+        }
+
+        $taxable = $baseAmt;
+        if (trim((string) ($state ?? '')) === 'Rajasthan') {
+            $cgst = $taxable * 0.09;
+            $sgst = $taxable * 0.09;
+            $igst = 0.0;
+        } else {
+            $cgst = 0.0;
+            $sgst = 0.0;
+            $igst = $taxable * 0.18;
+        }
+        $gst = $cgst + $sgst + $igst;
+
+        return [
+            'taxable' => $taxable,
+            'cgst' => $cgst,
+            'sgst' => $sgst,
+            'igst' => $igst,
+            'gst' => $gst,
+            'total' => $taxable + $gst,
+        ];
+    }
+
+    /** @var array<string, int|null> */
+    private array $syncPayByCache = [];
+
+    /**
+     * getamtlist payby: "Bank-CR" → Harsh Technology ledger; anything else → Cash.
+     */
+    private function resolveSyncPayById(array $record): ?int
+    {
+        if (! array_key_exists('harsh', $this->syncPayByCache)) {
+            $this->syncPayByCache['harsh'] = PayBy::query()
+                ->where(function ($q) {
+                    $q->whereRaw('LOWER(TRIM(name)) LIKE ?', ['%harsh%technology%'])
+                        ->orWhereRaw('LOWER(TRIM(name)) = ?', ['harsh technology']);
+                })
+                ->value('pbid');
+            $this->syncPayByCache['cash'] = PayBy::query()
+                ->whereRaw('LOWER(TRIM(name)) = ?', ['cash'])
+                ->value('pbid');
+        }
+
+        $external = trim((string) ($record['payby'] ?? ''));
+
+        if (strcasecmp($external, 'Bank-CR') === 0) {
+            return $this->syncPayByCache['harsh'];
+        }
+
+        return $this->syncPayByCache['cash'];
+    }
+
+    /**
      * getamtlist isinv=1 → due invoice (pending); nothing collected yet.
      */
     private function isSyncRecordDueInvoice(array $record): bool
@@ -196,28 +288,29 @@ class InvoiceController extends Controller
 
     /**
      * Align invoice header with line items: gross = sum(invoice_item.payment) when present, else $fallbackAmt.
-     * Recomputes taxable_amt and CGST/SGST/IGST from that gross (18% inclusive).
+     * Recomputes taxable_amt, GST split, payment total from line items (or $fallbackAmt).
      *
      * @param  string|null  $stateForGst  Prefer current sync row state; falls back to $invoice->state.
      */
-    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt, ?string $stateForGst = null, bool $isDue = false): void
+    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt, ?string $stateForGst = null, bool $isDue = false, bool $gstIncluded = true): void
     {
         $sum = (float) InvoiceItem::where('inv_id', $invoice->invid)->sum('payment');
-        $gross = $sum > 0 ? $sum : $fallbackAmt;
+        $baseAmt = $sum > 0 ? $sum : $fallbackAmt;
 
-        if ($gross <= 0) {
+        if ($baseAmt <= 0) {
             return;
         }
 
         $state = $stateForGst ?? $invoice->state;
-        [$taxable, $cgst, $sgst, $igst] = $this->splitInclusiveGst18($gross, $state);
+        $amounts = $this->computeSyncGstAmounts($baseAmt, $state, $gstIncluded);
 
-        $invoice->payment = $gross;
-        $invoice->taxable_amt = $taxable;
-        $invoice->cgst = $cgst;
-        $invoice->sgst = $sgst;
-        $invoice->igst = $igst;
-        $this->applySyncPaymentStatus($invoice, $gross, $isDue);
+        $invoice->payment = $amounts['total'];
+        $invoice->taxable_amt = $amounts['taxable'];
+        $invoice->gst = $amounts['gst'];
+        $invoice->cgst = $amounts['cgst'];
+        $invoice->sgst = $amounts['sgst'];
+        $invoice->igst = $amounts['igst'];
+        $this->applySyncPaymentStatus($invoice, $amounts['total'], $isDue);
         $invoice->save();
     }
 
@@ -523,7 +616,10 @@ class InvoiceController extends Controller
 
             $invoiceAmt = (float) ($record['amt'] ?? 0);
             $isDue = $this->isSyncRecordDueInvoice($record);
-            [$taxableAmt, $cgst, $sgst, $igst] = $this->splitInclusiveGst18($invoiceAmt, $record['state'] ?? null);
+            $paybyId = $this->resolveSyncPayById($record);
+            $gstIncluded = $this->isSyncGstIncluded($record);
+            $gstAmounts = $this->computeSyncGstAmounts($invoiceAmt, $record['state'] ?? null, $gstIncluded);
+            $totalAmt = $gstAmounts['total'];
 
             if ($existingInvoice) {
                 $invoice = $existingInvoice;
@@ -535,19 +631,19 @@ class InvoiceController extends Controller
                     'dt' => $invDt,
                     'state' => $record['state'] ?? null,
                     'addr' => $record['addr'] ?? $record['city'] ?? null,
-                    'gst' => (float) ($record['gstext'] ?? 0),
-                    'payment' => $invoiceAmt,
-                    'cgst' => $cgst,
-                    'sgst' => $sgst,
-                    'igst' => $igst,
+                    'gst' => $gstAmounts['gst'],
+                    'payment' => $totalAmt,
+                    'cgst' => $gstAmounts['cgst'],
+                    'sgst' => $gstAmounts['sgst'],
+                    'igst' => $gstAmounts['igst'],
                     'paytype' => $isDue ? 1 : 0,
-                    'paynow' => $isDue ? 0 : $invoiceAmt,
-                    'payby' => (isset($record['payby']) && trim((string) $record['payby']) === 'Bank-CR') ? 1 : 0,
+                    'paynow' => $isDue ? 0 : $totalAmt,
+                    'payby' => $paybyId,
                     'refno' => $refNo,
-                    'taxable_amt' => $taxableAmt,
+                    'taxable_amt' => $gstAmounts['taxable'],
                     'gstno' => $record['gstno'] ?? null,
-                    'paylater' => $isDue ? $invoiceAmt : 0,
-                    'balance' => $isDue ? $invoiceAmt : 0,
+                    'paylater' => $isDue ? $totalAmt : 0,
+                    'balance' => $isDue ? $totalAmt : 0,
                 ]);
 
                 $invoicesCreated++;
@@ -587,7 +683,11 @@ class InvoiceController extends Controller
                 }
             }
 
-            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $record['state'] ?? null, $isDue);
+            if ($paybyId !== null) {
+                $invoice->payby = $paybyId;
+            }
+
+            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $record['state'] ?? null, $isDue, $gstIncluded);
         }
 
         return response()->json([
