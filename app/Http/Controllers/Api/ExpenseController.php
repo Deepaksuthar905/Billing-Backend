@@ -4,11 +4,64 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Expense;
+use App\Models\PayBy;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class ExpenseController extends Controller
 {
+    /**
+     * Map request payload → expenses table columns (only existing columns).
+     *
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function mapExpensePayload(array $validated): array
+    {
+        $data = [
+            'exhid' => $validated['exhid'],
+            'description' => $validated['description'] ?? null,
+            'payment' => $validated['payment'] ?? null,
+            'taxable_amt' => $validated['taxable_amt'] ?? null,
+            'dt' => $validated['dt'] ?? null,
+            'party' => $validated['party'] ?? null,
+            'payby' => $validated['payby'] ?? null,
+            'refno' => $validated['refno'] ?? null,
+        ];
+
+        if (isset($validated['receipt_no'])) {
+            $data['receipt_no'] = $validated['receipt_no'];
+        }
+
+        foreach (['igst', 'cgst', 'sgst', 'gst'] as $col) {
+            if (array_key_exists($col, $validated) && Schema::hasColumn('expenses', $col)) {
+                $data[$col] = $validated[$col];
+            }
+        }
+
+        if (array_key_exists('state', $validated) && Schema::hasColumn('expenses', 'state')) {
+            $data['state'] = $validated['state'];
+        }
+
+        if (array_key_exists('item_id', $validated) && Schema::hasColumn('expenses', 'item_id')) {
+            $data['item_id'] = $validated['item_id'];
+        }
+
+        return $data;
+    }
+
+    private function resolveExpensePayBy(array $validated): ?int
+    {
+        if (isset($validated['payby']) && $validated['payby'] !== '' && $validated['payby'] !== null) {
+            return (int) $validated['payby'];
+        }
+
+        return PayBy::query()
+            ->whereRaw('LOWER(TRIM(name)) = ?', ['cash'])
+            ->value('pbid');
+    }
+
     /**
      * Create a new expense record.
      * receipt_no is auto-generated (next number) if not sent.
@@ -21,24 +74,31 @@ class ExpenseController extends Controller
             'receipt_no' => ['nullable', 'integer', 'min:1'],
             'payment' => ['nullable', 'numeric', 'min:0'],
             'taxable_amt' => ['nullable', 'numeric', 'min:0'],
-            'igst' => ['nullable', 'integer'],
-            'cgst' => ['nullable', 'integer'],
-            'sgst' => ['nullable', 'integer'],
+            'gst' => ['nullable', 'numeric', 'min:0'],
+            'igst' => ['nullable', 'numeric', 'min:0'],
+            'cgst' => ['nullable', 'numeric', 'min:0'],
+            'sgst' => ['nullable', 'numeric', 'min:0'],
             'dt' => ['nullable', 'date'],
+            'state' => ['nullable', 'string', 'max:100'],
+            'item_id' => ['nullable', 'integer', 'exists:items,item_id'],
             'party' => ['nullable', 'integer', 'exists:party,pid'],
-            'payby' => ['required', 'integer', 'in:0,1'],
+            'payby' => ['nullable', 'integer', 'exists:pay_by,pbid'],
             'refno' => ['nullable', 'string', 'max:100'],
         ]);
 
-        if (empty($validated['receipt_no'])) {
-            $validated['receipt_no'] = (int) Expense::query()
-                    ->where(function ($q) {
-                        $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
-                    })
-                    ->max('receipt_no') + 1;
+        $validated['payby'] = $this->resolveExpensePayBy($validated);
+
+        $data = $this->mapExpensePayload($validated);
+
+        if (empty($data['receipt_no'])) {
+            $data['receipt_no'] = (int) Expense::query()
+                ->where(function ($q) {
+                    $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+                })
+                ->max('receipt_no') + 1;
         }
 
-        $expense = Expense::create($validated);
+        $expense = Expense::create($data);
 
         return response()->json([
             'message' => 'Expense created successfully',
@@ -68,16 +128,19 @@ class ExpenseController extends Controller
             'receipt_no' => ['nullable', 'integer', 'min:1'],
             'payment' => ['nullable', 'numeric', 'min:0'],
             'taxable_amt' => ['nullable', 'numeric', 'min:0'],
-            'igst' => ['nullable', 'integer'],
-            'cgst' => ['nullable', 'integer'],
-            'sgst' => ['nullable', 'integer'],
+            'gst' => ['nullable', 'numeric', 'min:0'],
+            'igst' => ['nullable', 'numeric', 'min:0'],
+            'cgst' => ['nullable', 'numeric', 'min:0'],
+            'sgst' => ['nullable', 'numeric', 'min:0'],
             'dt' => ['nullable', 'date'],
+            'state' => ['nullable', 'string', 'max:100'],
+            'item_id' => ['nullable', 'integer', 'exists:items,item_id'],
             'party' => ['nullable', 'integer', 'exists:party,pid'],
-            'payby' => ['sometimes', 'integer', 'in:0,1'],
+            'payby' => ['nullable', 'integer', 'exists:pay_by,pbid'],
             'refno' => ['nullable', 'string', 'max:100'],
         ]);
 
-        $expense->update($validated);
+        $expense->update($this->mapExpensePayload($validated));
 
         return response()->json([
             'message' => 'Expense updated successfully',
