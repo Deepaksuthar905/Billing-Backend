@@ -37,11 +37,33 @@ class PayInController extends Controller
      */
     public function index(): JsonResponse
     {
-        $payIns = PayIn::with(['party', 'invoice', 'payBy'])->get();
+        $payIns = PayIn::with(['party', 'invoice', 'payBy'])
+            ->where('isdel', '!=', 1)
+            ->get();
 
         return response()->json([
             'message' => 'PayIn list fetched successfully',
             'data' => $payIns,
+        ], 200);
+    }
+
+    // delete the pay_in record means set isdel to 1
+    public function delpay_in($pinid): JsonResponse
+    {
+        $payIn = PayIn::find($pinid);
+        if (! $payIn) {
+            return response()->json([
+                'message' => 'PayIn not found',
+            ], 404);
+        }
+
+        // `isdel` is not fillable; set directly and save.
+        $payIn->isdel = 1;
+        $payIn->save();
+
+        return response()->json([
+            'message' => 'PayIn deleted successfully',
+            'data' => $payIn,
         ], 200);
     }
 }

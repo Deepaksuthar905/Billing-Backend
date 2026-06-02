@@ -68,4 +68,7 @@ Route::prefix('api')->group(function () {
     //Route::post('/delpurchase', [PurchaseController::class, 'delpurchase']);
     Route::post('/delpurchase/{prid}', [PurchaseController::class, 'delpurchase'])->whereNumber('prid');
     Route::post('/delexpenses/{exid}', [ExpenseController::class, 'delexpense'])->whereNumber('exid');
+
+
+    Route::post('/delpay-in/{pinid}', [PayInController::class, 'delpay_in'])->whereNumber('pinid');
 });
