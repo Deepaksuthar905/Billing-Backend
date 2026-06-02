@@ -368,12 +368,17 @@ class InvoiceController extends Controller
                 continue;
             }
 
-            $payby = isset($record['payby']) ? (int) $record['payby'] : null;
-            if ($payby !== null && $payby > 0 && ! PayBy::where('pbid', $payby)->exists()) {
-                $payby = null;
-            }
-            if ($payby === 0) {
-                $payby = null;
+            // Pay-in mapping rule:
+            // - API payby = 0  → Harsh Technology
+            // - anything else → Cash
+            $apiPayby = isset($record['payby']) ? (int) $record['payby'] : null;
+            if ($apiPayby === 0) {
+                $payby = $this->syncPayByCache['harsh'] ?? $this->resolveSyncPayById(['payby' => 'Bank-CR']);
+                if ($payby === null) {
+                    $payby = $this->resolveSyncPayById(['payby' => '']); // fallback to Cash if harsh missing
+                }
+            } else {
+                $payby = $this->resolveSyncPayById(['payby' => '']); // Cash
             }
 
             $ref = isset($record['ref']) ? trim((string) $record['ref']) : '';
