@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\LedgerController;
 use App\Http\Controllers\Api\SalesController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\GeneralEntryController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -61,6 +62,8 @@ Route::prefix('api')->group(function () {
     Route::put('/purchases/{id}', [PurchaseController::class, 'update'])->whereNumber('id');
     Route::put('/items/{id}', [ItemController::class, 'update']);
     Route::post('/sync-invoices', [InvoiceController::class, 'sync']);
+    Route::post('/general-entry', [GeneralEntryController::class, 'store']);
+    Route::get('/general-entry', [GeneralEntryController::class, 'index']);
     Route::get('/gstratereport', [PurchaseController::class, 'gstratereport']);
     Route::post('/expensereport', [PurchaseController::class, 'expensereport']);
     Route::post('/ledger', [LedgerController::class, 'index']);

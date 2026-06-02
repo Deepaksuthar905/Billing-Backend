@@ -11,6 +11,7 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class LedgerController extends Controller
 {
@@ -44,7 +45,19 @@ class LedgerController extends Controller
             ->where('payby', $pbid)
             ->sum('payment');
 
-        return $invoiceTotal - $purchaseTotal - $expenseTotal;
+        $journalOut = (float) DB::table('journal_entry')
+            ->whereBetween('dt', [$from, $to])
+            ->where('isdel', '!=', 1)
+            ->where('from_acc', $pbid)
+            ->sum('amt');
+
+        $journalIn = (float) DB::table('journal_entry')
+            ->whereBetween('dt', [$from, $to])
+            ->where('isdel', '!=', 1)
+            ->where('to_acc', $pbid)
+            ->sum('amt');
+
+        return $invoiceTotal - $purchaseTotal - $expenseTotal - $journalOut + $journalIn;
     }
 
     public function index(Request $request): JsonResponse
@@ -147,10 +160,46 @@ class LedgerController extends Controller
                 'debit' => (float) $e->payment,
             ]);
 
+        // ---- Journal: transfer out (from this account) -------------------------
+        $journalOut = DB::table('journal_entry as j')
+            ->leftJoin('pay_by as to_pb', 'to_pb.pbid', '=', 'j.to_acc')
+            ->whereBetween('j.dt', [$effectiveFrom, $to])
+            ->where('j.isdel', '!=', 1)
+            ->where('j.from_acc', $pbid)
+            ->get(['j.jid', 'j.dt', 'j.amt', 'j.detail', 'to_pb.name as to_name'])
+            ->map(fn ($j) => [
+                'date' => $j->dt,
+                'type' => 'journal',
+                'ref_id' => $j->jid,
+                'ref_no' => (string) $j->jid,
+                'description' => $j->detail ?: ('To '.($j->to_name ?? 'account')),
+                'credit' => 0.0,
+                'debit' => (float) $j->amt,
+            ]);
+
+        // ---- Journal: transfer in (to this account) ----------------------------
+        $journalIn = DB::table('journal_entry as j')
+            ->leftJoin('pay_by as from_pb', 'from_pb.pbid', '=', 'j.from_acc')
+            ->whereBetween('j.dt', [$effectiveFrom, $to])
+            ->where('j.isdel', '!=', 1)
+            ->where('j.to_acc', $pbid)
+            ->get(['j.jid', 'j.dt', 'j.amt', 'j.detail', 'from_pb.name as from_name'])
+            ->map(fn ($j) => [
+                'date' => $j->dt,
+                'type' => 'journal',
+                'ref_id' => $j->jid,
+                'ref_no' => (string) $j->jid,
+                'description' => $j->detail ?: ('From '.($j->from_name ?? 'account')),
+                'credit' => (float) $j->amt,
+                'debit' => 0.0,
+            ]);
+
         /** @var Collection<int, array<string, mixed>> $entries */
         $entries = $invoices
             ->concat($purchases)
             ->concat($expenses)
+            ->concat($journalOut)
+            ->concat($journalIn)
             ->sortBy('date')
             ->values();
 
