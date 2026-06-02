@@ -8,12 +8,41 @@ use App\Models\InvoiceItem;
 use App\Models\Item;
 use App\Models\Party;
 use App\Models\PayBy;
+use App\Models\PayIn;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
+use Throwable;
+
 class InvoiceController extends Controller
 {
+    private function applyInvoiceNotDeletedScope(Builder $query): Builder
+    {
+        if (Schema::hasColumn('invoice', 'isdel')) {
+            $query->where(function ($q) {
+                $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+            });
+        }
+
+        return $query;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function collectSyncInvoiceList(array $body): array
+    {
+        $list = $body['data']['list'] ?? $body['list'] ?? null;
+        if (! is_array($list)) {
+            return [];
+        }
+
+        return array_values(array_filter($list, fn ($row) => is_array($row)));
+    }
+
     /**
      * Map incoming item payload fields → invoice_item table columns.
      */
@@ -250,6 +279,128 @@ class InvoiceController extends Controller
         }
 
         return $this->syncPayByCache['cash'];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function collectSyncPayInList(array $body): array
+    {
+        $payin = $body['data']['payin'] ?? $body['payin'] ?? null;
+        if (! is_array($payin)) {
+            return [];
+        }
+
+        $list = $payin['list'] ?? [];
+
+        return is_array($list) ? array_values($list) : [];
+    }
+
+    /**
+     * payin.list → pay_in (direct field map only).
+     *
+     * @param  list<array<string, mixed>>  $records
+     * @return array{created: int, skipped: int}
+     */
+    private function syncPayInRecords(array $records): array
+    {
+        $created = 0;
+        $skipped = 0;
+
+        foreach ($records as $record) {
+            if (! is_array($record)) {
+                $skipped++;
+                continue;
+            }
+
+            if ((int) ($record['isdel'] ?? 0) === 1) {
+                $skipped++;
+                continue;
+            }
+
+            $pnid = isset($record['pnid']) ? (int) $record['pnid'] : 0;
+            if ($pnid <= 0) {
+                $skipped++;
+                continue;
+            }
+
+            if (Schema::hasColumn('pay_in', 'ext_pnid') && PayIn::where('ext_pnid', $pnid)->exists()) {
+                $skipped++;
+                continue;
+            }
+
+            $invoice = null;
+            $apiInvId = isset($record['invoice_id']) ? (int) $record['invoice_id'] : 0;
+            if ($apiInvId > 0) {
+                $invoice = Invoice::where('invid', $apiInvId)->first();
+            }
+            // API invoice_id is often their id; link by amid → invoice.refno (same as invoice sync).
+            if (! $invoice) {
+                $amid = isset($record['amid']) ? trim((string) $record['amid']) : '';
+                if ($amid !== '') {
+                    $invoice = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $amid))
+                        ->orderByDesc('invid')
+                        ->first();
+                }
+            }
+            if (! $invoice) {
+                $skipped++;
+                continue;
+            }
+
+            $invId = (int) $invoice->invid;
+
+            $partyId = null;
+            if (isset($record['cid']) && $record['cid'] !== '' && $record['cid'] !== null) {
+                $partyId = Party::where('cid', (string) $record['cid'])->value('pid');
+            }
+            if ($partyId === null) {
+                $partyId = $invoice->pid;
+            }
+            if ($partyId === null) {
+                $skipped++;
+                continue;
+            }
+
+            $amount = (float) ($record['amt'] ?? 0);
+            if ($amount <= 0) {
+                $skipped++;
+                continue;
+            }
+
+            $payby = isset($record['payby']) ? (int) $record['payby'] : null;
+            if ($payby !== null && $payby > 0 && ! PayBy::where('pbid', $payby)->exists()) {
+                $payby = null;
+            }
+            if ($payby === 0) {
+                $payby = null;
+            }
+
+            $ref = isset($record['ref']) ? trim((string) $record['ref']) : '';
+
+            $attrs = [
+                'party_id' => (int) $partyId,
+                'inv_id' => $invId,
+                'dt' => ! empty($record['dt']) ? (string) $record['dt'] : now()->format('Y-m-d'),
+                'description' => isset($record['detail']) ? (string) $record['detail'] : null,
+                'payby' => $payby,
+                'amount' => $amount,
+                'referal' => $ref !== '' ? $ref : null,
+            ];
+            if (Schema::hasColumn('pay_in', 'ext_pnid')) {
+                $attrs['ext_pnid'] = $pnid;
+            }
+
+            try {
+                PayIn::create($attrs);
+                $created++;
+            } catch (Throwable $e) {
+                Log::warning('pay-in sync row skipped', ['pnid' => $pnid, 'error' => $e->getMessage()]);
+                $skipped++;
+            }
+        }
+
+        return ['created' => $created, 'skipped' => $skipped];
     }
 
     /**
@@ -536,6 +687,24 @@ class InvoiceController extends Controller
      */
     public function sync(Request $request): JsonResponse
     {
+        try {
+            return $this->runSync($request);
+        } catch (Throwable $e) {
+            Log::error('Invoice sync failed', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
+
+            return response()->json([
+                'message' => 'Sync failed',
+                'error' => config('app.debug') ? $e->getMessage() : 'Internal server error',
+            ], 500);
+        }
+    }
+
+    private function runSync(Request $request): JsonResponse
+    {
         $from_date = $request->query('from');
         $to_date = $request->query('to');
 
@@ -549,9 +718,8 @@ class InvoiceController extends Controller
             return response()->json(['message' => 'External API request failed', 'status' => $response->status()], 502);
         }
 
-        $body = $response->json();
-        // getamtlist returns data.list
-        $data = $body['data']['list'] ?? $body['data'] ?? (is_array($body) ? $body : []);
+        $body = $response->json() ?? [];
+        $data = $this->collectSyncInvoiceList($body);
 
         $partiesCreated = 0;
         $invoicesCreated = 0;
@@ -598,20 +766,12 @@ class InvoiceController extends Controller
             // 2) by inv_no + pid — same invoice no. for party: one invoice row; new sync rows add items only
             $existingInvoice = null;
             if ($refNo !== null) {
-                $existingInvoice = Invoice::where('refno', $refNo)
-                    ->where(function ($q) {
-                        $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
-                    })
-                    ->first();
+                $existingInvoice = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $refNo))->first();
             }
             if (! $existingInvoice && $invNo !== null) {
-                $existingInvoice = Invoice::where('pid', $party->pid)
-                    ->where('inv_no', $invNo)
-                    ->where(function ($q) {
-                        $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
-                    })
-                    ->orderByDesc('invid')
-                    ->first();
+                $existingInvoice = $this->applyInvoiceNotDeletedScope(
+                    Invoice::where('pid', $party->pid)->where('inv_no', $invNo)
+                )->orderByDesc('invid')->first();
             }
 
             $invoiceAmt = (float) ($record['amt'] ?? 0);
@@ -641,7 +801,6 @@ class InvoiceController extends Controller
                     'payby' => $paybyId,
                     'refno' => $refNo,
                     'taxable_amt' => $gstAmounts['taxable'],
-                    'gstno' => $record['gstno'] ?? null,
                     'paylater' => $isDue ? $totalAmt : 0,
                     'balance' => $isDue ? $totalAmt : 0,
                 ]);
@@ -690,12 +849,16 @@ class InvoiceController extends Controller
             $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $record['state'] ?? null, $isDue, $gstIncluded);
         }
 
+        $payInStats = $this->syncPayInRecords($this->collectSyncPayInList($body));
+
         return response()->json([
             'message' => 'Sync successful',
             'parties_created' => $partiesCreated,
             'invoices_created' => $invoicesCreated,
             'invoices_matched' => $invoicesMatched,
             'invoice_items_created' => $invoiceItemsCreated,
+            'pay_ins_created' => $payInStats['created'],
+            'pay_ins_skipped' => $payInStats['skipped'],
         ], 200);
     }
 }

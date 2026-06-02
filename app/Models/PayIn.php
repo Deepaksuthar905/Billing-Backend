@@ -27,6 +27,7 @@ class PayIn extends Model
         'payby',
         'amount',
         'referal',
+        'ext_pnid',
     ];
 
     /**
