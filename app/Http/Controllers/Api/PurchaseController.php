@@ -293,4 +293,6 @@ class PurchaseController extends Controller
             'data'    => $all,
         ], 200);
     }
+
+    
 }

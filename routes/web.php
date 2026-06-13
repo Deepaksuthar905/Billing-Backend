@@ -46,6 +46,7 @@ Route::prefix('api')->group(function () {
     Route::get('/items', [ItemController::class, 'index']);
     Route::post('/invoices', [InvoiceController::class, 'store']);
     Route::get('/invoices', [InvoiceController::class, 'index']);
+    Route::get('/invoices/columns', [InvoiceController::class, 'columns']);
     Route::get('/invoices/{id}', [InvoiceController::class, 'show'])->whereNumber('id');
     Route::put('/invoices/{id}', [InvoiceController::class, 'update'])->whereNumber('id');
     Route::post('/pay-in', [PayInController::class, 'store']);

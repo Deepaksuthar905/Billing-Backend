@@ -6,12 +6,14 @@ use App\Http\Controllers\Controller;
 use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\PayBy;
+use App\Models\PayIn;
 use App\Models\Purchase;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class LedgerController extends Controller
 {
@@ -23,17 +25,58 @@ class LedgerController extends Controller
         return fn ($q) => $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
     }
 
+    private function payInNotDeletedScope(): \Closure
+    {
+        return function ($q) {
+            if (Schema::hasColumn('pay_in', 'isdel')) {
+                $q->where('isdel', '!=', 1);
+            }
+        };
+    }
+
     /**
-     * Net cash effect for one pay-by channel: invoice payments (credit) minus purchases and expenses (debit).
+     * Invoices that are fully paid on invoice row only (no pay_in rows) — cash in at invoice date.
+     */
+    private function invoicesForLedgerCredit(int $pbid, string $from, string $to)
+    {
+        $scope = $this->notDeletedScope();
+
+        return Invoice::with('party')
+            ->whereBetween('dt', [$from, $to])
+            ->where($scope)
+            ->where('payby', $pbid)
+            ->where(function ($q) {
+                $q->whereNull('balance')->orWhere('balance', '<=', 0);
+            })
+            ->whereDoesntHave('payIns', $this->payInNotDeletedScope());
+    }
+
+    /**
+     * Pay-in received into this account (actual cash in — due invoices use pay_in only).
+     */
+    private function payInsForLedger(int $pbid, string $from, string $to)
+    {
+        $query = PayIn::with(['party', 'invoice'])
+            ->whereBetween('dt', [$from, $to])
+            ->where('payby', $pbid);
+
+        $query->where($this->payInNotDeletedScope());
+
+        return $query;
+    }
+
+    /**
+     * Net cash effect: pay_in + paid invoices (no pay_in) − purchases − expenses ± journal.
      */
     private function netMovementForPayBy(int $pbid, string $from, string $to): float
     {
         $scope = $this->notDeletedScope();
 
-        $invoiceTotal = (float) Invoice::whereBetween('dt', [$from, $to])
-            ->where($scope)
-            ->where('payby', $pbid)
-            ->sum('payment');
+        $invoiceTotal = (float) $this->invoicesForLedgerCredit($pbid, $from, $to)->sum('payment');
+
+        $payInQuery = PayIn::whereBetween('dt', [$from, $to])->where('payby', $pbid);
+        $payInQuery->where($this->payInNotDeletedScope());
+        $payInTotal = (float) $payInQuery->sum('amount');
 
         $purchaseTotal = (float) Purchase::whereBetween('dt', [$from, $to])
             ->where($scope)
@@ -57,7 +100,7 @@ class LedgerController extends Controller
             ->where('to_acc', $pbid)
             ->sum('amt');
 
-        return $invoiceTotal - $purchaseTotal - $expenseTotal - $journalOut + $journalIn;
+        return $invoiceTotal + $payInTotal - $purchaseTotal - $expenseTotal - $journalOut + $journalIn;
     }
 
     public function index(Request $request): JsonResponse
@@ -84,7 +127,6 @@ class LedgerController extends Controller
         $fiscalStart = self::FISCAL_START;
         $effectiveFrom = max($from, $fiscalStart);
 
-        // No rows (e.g. to before 1 Apr while from is in March): opening stays FY start balance
         if ($effectiveFrom > $to) {
             $openingBalance = (float) $payBy->prebalance;
 
@@ -101,7 +143,6 @@ class LedgerController extends Controller
             ], 200);
         }
 
-        // Opening at start of visible window: 1 Apr prebalance + everything from 1 Apr through day before effectiveFrom
         $openingBalance = (float) $payBy->prebalance;
         if ($effectiveFrom > $fiscalStart) {
             $priorEnd = Carbon::parse($effectiveFrom)->subDay()->format('Y-m-d');
@@ -112,11 +153,25 @@ class LedgerController extends Controller
 
         $scope = $this->notDeletedScope();
 
-        // ---- CREDITS: Invoices -------------------------------------------------
-        $invoices = Invoice::with('party')
-            ->whereBetween('dt', [$effectiveFrom, $to])
-            ->where($scope)
-            ->where('payby', $pbid)
+        // CREDITS: pay_in only when money actually received (due invoice full amount NOT here)
+        $payIns = $this->payInsForLedger($pbid, $effectiveFrom, $to)
+            ->get()
+            ->map(fn ($p) => [
+                'date' => $p->dt?->format('Y-m-d'),
+                'type' => 'pay_in',
+                'ref_id' => $p->pinid,
+                'ref_no' => $p->referal ?? (string) $p->pinid,
+                'description' => trim(
+                    ($p->party?->partyname ?? '-')
+                    .($p->invoice?->inv_no ? ' · Inv '.$p->invoice->inv_no : '')
+                    .($p->description ? ' · '.$p->description : '')
+                ),
+                'credit' => (float) $p->amount,
+                'debit' => 0.0,
+            ]);
+
+        // CREDITS: invoice only if fully paid on invoice row and no pay_in (legacy / cash at bill)
+        $invoices = $this->invoicesForLedgerCredit($pbid, $effectiveFrom, $to)
             ->get()
             ->map(fn ($inv) => [
                 'date' => $inv->dt?->format('Y-m-d'),
@@ -128,7 +183,6 @@ class LedgerController extends Controller
                 'debit' => 0.0,
             ]);
 
-        // ---- DEBITS: Purchases -------------------------------------------------
         $purchases = Purchase::with('party')
             ->whereBetween('dt', [$effectiveFrom, $to])
             ->where($scope)
@@ -144,7 +198,6 @@ class LedgerController extends Controller
                 'debit' => (float) $p->payment,
             ]);
 
-        // ---- DEBITS: Expenses --------------------------------------------------
         $expenses = Expense::with('expensesHead')
             ->whereBetween('dt', [$effectiveFrom, $to])
             ->where($scope)
@@ -160,7 +213,6 @@ class LedgerController extends Controller
                 'debit' => (float) $e->payment,
             ]);
 
-        // ---- Journal: transfer out (from this account) -------------------------
         $journalOut = DB::table('journal_entry as j')
             ->leftJoin('pay_by as to_pb', 'to_pb.pbid', '=', 'j.to_acc')
             ->whereBetween('j.dt', [$effectiveFrom, $to])
@@ -177,7 +229,6 @@ class LedgerController extends Controller
                 'debit' => (float) $j->amt,
             ]);
 
-        // ---- Journal: transfer in (to this account) ----------------------------
         $journalIn = DB::table('journal_entry as j')
             ->leftJoin('pay_by as from_pb', 'from_pb.pbid', '=', 'j.from_acc')
             ->whereBetween('j.dt', [$effectiveFrom, $to])
@@ -195,7 +246,8 @@ class LedgerController extends Controller
             ]);
 
         /** @var Collection<int, array<string, mixed>> $entries */
-        $entries = $invoices
+        $entries = $payIns
+            ->concat($invoices)
             ->concat($purchases)
             ->concat($expenses)
             ->concat($journalOut)

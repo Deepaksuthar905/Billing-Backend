@@ -548,6 +548,7 @@ class InvoiceController extends Controller
                 'balance'     => (float) $inv->balance,
                 'status'      => ($inv->balance && (float) $inv->balance > 0) ? 'pending' : 'paid',
                 'items'       => $inv->invoiceItems,
+                'gstno'        => $inv->gstno,
             ],
         ], 200);
     }
@@ -662,6 +663,7 @@ class InvoiceController extends Controller
                 'balance' => $pendingBalance,
                 'state' => $inv->state,
                 'status' => $status,
+                'billing_name' => $inv->billing_name ?? $inv->party?->billing_name,
             ];
         });
 
@@ -685,6 +687,17 @@ class InvoiceController extends Controller
         $invoice->save();
 
         return response()->json(['message' => 'Invoice deleted successfully'], 200);
+    }
+
+    /**
+     * Return invoice table column names from the database.
+     */
+    public function columns(): JsonResponse
+    {
+        return response()->json([
+            'table' => 'invoice',
+            'columns' => Schema::getColumnListing('invoice'),
+        ], 200);
     }
 
     /**
