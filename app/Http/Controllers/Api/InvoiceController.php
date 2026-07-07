@@ -191,6 +191,27 @@ class InvoiceController extends Controller
     }
 
     /**
+     * getamtlist state: "Out of India" / "Outside India" → treat as Rajasthan (CGST+SGST, same-state).
+     */
+    private function normalizeSyncState(?string $state): ?string
+    {
+        if ($state === null || trim($state) === '') {
+            return $state;
+        }
+
+        $normalized = strtolower(trim($state));
+        if (
+            str_contains($normalized, 'out of india')
+            || str_contains($normalized, 'outside india')
+            || str_contains($normalized, 'out-of-india')
+        ) {
+            return 'Rajasthan';
+        }
+
+        return trim($state);
+    }
+
+    /**
      * getamtlist gstext: 0 / empty → 18% GST included in amt; any other value → GST extra on top of amt.
      */
     private function isSyncGstIncluded(array $record): bool
@@ -750,6 +771,7 @@ class InvoiceController extends Controller
 
             // Party: cid se find, nahi mila to create with full mapping
             $party = $cidStr !== null ? Party::where('cid', $cidStr)->first() : null;
+            $syncState = $this->normalizeSyncState(isset($record['state']) ? (string) $record['state'] : null);
 
             $partyAttrs = [
                 'partyname' => $record['billing_name'] ?? '',
@@ -758,10 +780,10 @@ class InvoiceController extends Controller
                 'billing_name' => $record['billing_name'] ?? null,
                 'gst_no' => $record['gstno'] ?? null,
                 'city' => $record['city'] ?? null,
-                'state' => $record['state'] ?? null,
+                'state' => $syncState,
                 'mobno' => $record['mob'] ?? null,
                 'gst_reg' => isset($record['gst_regular']) ? (int) (bool) $record['gst_regular'] : 0,
-                'same_state' => isset($record['state']) && trim((string) $record['state']) === 'Rajasthan' ? 1 : 0,
+                'same_state' => $syncState !== null && trim($syncState) === 'Rajasthan' ? 1 : 0,
             ];
 
             if ($party) {
@@ -796,7 +818,7 @@ class InvoiceController extends Controller
             $isDue = $this->isSyncRecordDueInvoice($record);
             $paybyId = $this->resolveSyncPayById($record);
             $gstIncluded = $this->isSyncGstIncluded($record);
-            $gstAmounts = $this->computeSyncGstAmounts($invoiceAmt, $record['state'] ?? null, $gstIncluded);
+            $gstAmounts = $this->computeSyncGstAmounts($invoiceAmt, $syncState, $gstIncluded);
             $totalAmt = $gstAmounts['total'];
 
             if ($existingInvoice) {
@@ -807,7 +829,7 @@ class InvoiceController extends Controller
                     'pid' => $party->pid,
                     'inv_no' => $invNo,
                     'dt' => $invDt,
-                    'state' => $record['state'] ?? null,
+                    'state' => $syncState,
                     'addr' => $record['addr'] ?? $record['city'] ?? null,
                     'gst' => $gstAmounts['gst'],
                     'payment' => $totalAmt,
@@ -864,7 +886,9 @@ class InvoiceController extends Controller
                 $invoice->payby = $paybyId;
             }
 
-            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $record['state'] ?? null, $isDue, $gstIncluded);
+            $invoice->state = $syncState;
+
+            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $syncState, $isDue, $gstIncluded);
         }
 
         $payInStats = $this->syncPayInRecords($this->collectSyncPayInList($body));

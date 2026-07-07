@@ -34,10 +34,13 @@ class ExpenseController extends Controller
             $data['receipt_no'] = $validated['receipt_no'];
         }
 
-        foreach (['igst', 'cgst', 'sgst', 'gst'] as $col) {
-            if (array_key_exists($col, $validated) && Schema::hasColumn('expenses', $col)) {
-                $data[$col] = $validated[$col];
+        foreach (['payment', 'taxable_amt', 'gst', 'igst', 'cgst', 'sgst'] as $col) {
+            if (! array_key_exists($col, $validated) || ! Schema::hasColumn('expenses', $col)) {
+                continue;
             }
+
+            $value = $validated[$col];
+            $data[$col] = ($value === null || $value === '') ? null : round((float) $value, 2);
         }
 
         if (array_key_exists('state', $validated) && Schema::hasColumn('expenses', 'state')) {
@@ -49,6 +52,38 @@ class ExpenseController extends Controller
         }
 
         return $data;
+    }
+
+    /**
+     * DB se raw decimal value read karke 2 decimal places ke saath return karta hai.
+     */
+    private function formatDecimalValue(Expense $expense, string $field): ?string
+    {
+        if (! array_key_exists($field, $expense->getAttributes())) {
+            return null;
+        }
+
+        $raw = $expense->getRawOriginal($field);
+
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+
+        return number_format((float) $raw, 2, '.', '');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formatExpenseForResponse(Expense $expense): array
+    {
+        $row = $expense->toArray();
+
+        foreach (['payment', 'taxable_amt', 'gst', 'igst', 'cgst', 'sgst'] as $field) {
+            $row[$field] = $this->formatDecimalValue($expense, $field);
+        }
+
+        return $row;
     }
 
     private function resolveExpensePayBy(array $validated): ?int
@@ -102,7 +137,7 @@ class ExpenseController extends Controller
 
         return response()->json([
             'message' => 'Expense created successfully',
-            'data' => $expense,
+            'data' => $this->formatExpenseForResponse($expense->load(['expensesHead', 'partyRelation'])),
         ], 201);
     }
 
@@ -144,7 +179,7 @@ class ExpenseController extends Controller
 
         return response()->json([
             'message' => 'Expense updated successfully',
-            'data' => $expense->fresh(['expensesHead', 'partyRelation']),
+            'data' => $this->formatExpenseForResponse($expense->fresh(['expensesHead', 'partyRelation'])),
         ], 200);
     }
 
@@ -170,17 +205,32 @@ class ExpenseController extends Controller
     }
 
     /**
-     * Fetch all expenses.
+     * Fetch expenses. Query: from=Y-m-d, to=Y-m-d (optional).
      */
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
-        $expenses = Expense::with(['expensesHead', 'partyRelation'])->where(function ($q) {
+        $from = $request->query('from');
+        $to = $request->query('to');
+
+        $query = Expense::with(['expensesHead', 'partyRelation'])->where(function ($q) {
             $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
-        })->get();
+        });
+
+        if ($from && $to) {
+            $query->whereBetween('dt', [$from, $to]);
+        } elseif ($from) {
+            $query->whereDate('dt', '>=', $from);
+        } elseif ($to) {
+            $query->whereDate('dt', '<=', $to);
+        }
+
+        $expenses = $query->orderByDesc('dt')->get();
 
         return response()->json([
             'message' => 'Expenses fetched successfully',
-            'data' => $expenses,
+            'data' => $expenses
+                ->map(fn (Expense $expense) => $this->formatExpenseForResponse($expense))
+                ->values(),
         ], 200);
     }
 }
