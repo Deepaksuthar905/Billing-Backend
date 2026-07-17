@@ -15,6 +15,8 @@ use App\Http\Controllers\Api\LedgerController;
 use App\Http\Controllers\Api\SalesController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\GeneralEntryController;
+use App\Http\Controllers\Api\EmployeeController;
+use App\Http\Controllers\Api\SalaryPaymentController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -73,6 +75,12 @@ Route::prefix('api')->group(function () {
     Route::post('/delpurchase/{prid}', [PurchaseController::class, 'delpurchase'])->whereNumber('prid');
     Route::post('/delexpenses/{exid}', [ExpenseController::class, 'delexpense'])->whereNumber('exid');
 
+    Route::post('/employees', [EmployeeController::class, 'store']);
+    Route::get('/employees', [EmployeeController::class, 'index']);
+    Route::post('/salary-payments', [SalaryPaymentController::class, 'store']);
+    Route::get('/salary-payments', [SalaryPaymentController::class, 'index']);
+    Route::get('/salary-payments/{salid}', [SalaryPaymentController::class, 'show'])->whereNumber('salid');
+    Route::put('/salary-payments/{salid}', [SalaryPaymentController::class, 'update'])->whereNumber('salid');
 
     Route::post('/delpay-in/{pinid}', [PayInController::class, 'delpay_in'])->whereNumber('pinid');
 });

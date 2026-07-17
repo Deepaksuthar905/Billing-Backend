@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\PayBy;
 use App\Models\PayIn;
 use App\Models\Purchase;
+use App\Models\SalaryPayment;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -66,7 +67,7 @@ class LedgerController extends Controller
     }
 
     /**
-     * Net cash effect: pay_in + paid invoices (no pay_in) − purchases − expenses ± journal.
+     * Net cash effect: pay_in + paid invoices (no pay_in) − purchases − expenses − salary ± journal.
      */
     private function netMovementForPayBy(int $pbid, string $from, string $to): float
     {
@@ -88,6 +89,11 @@ class LedgerController extends Controller
             ->where('payby', $pbid)
             ->sum('payment');
 
+        $salaryTotal = (float) SalaryPayment::whereBetween('dt', [$from, $to])
+            ->where($scope)
+            ->where('payby', $pbid)
+            ->sum('net_amt');
+
         $journalOut = (float) DB::table('journal_entry')
             ->whereBetween('dt', [$from, $to])
             ->where('isdel', '!=', 1)
@@ -100,7 +106,7 @@ class LedgerController extends Controller
             ->where('to_acc', $pbid)
             ->sum('amt');
 
-        return $invoiceTotal + $payInTotal - $purchaseTotal - $expenseTotal - $journalOut + $journalIn;
+        return $invoiceTotal + $payInTotal - $purchaseTotal - $expenseTotal - $salaryTotal - $journalOut + $journalIn;
     }
 
     public function index(Request $request): JsonResponse
@@ -213,6 +219,25 @@ class LedgerController extends Controller
                 'debit' => (float) $e->payment,
             ]);
 
+        $salaryPayments = SalaryPayment::with('employee')
+            ->whereBetween('dt', [$effectiveFrom, $to])
+            ->where($scope)
+            ->where('payby', $pbid)
+            ->get()
+            ->map(fn ($s) => [
+                'date' => $s->dt?->format('Y-m-d'),
+                'type' => 'salary',
+                'ref_id' => $s->salid,
+                'ref_no' => $s->receipt_no,
+                'description' => trim(
+                    ($s->employee?->empname ?? '-')
+                    .' · '.ucfirst((string) $s->payment_type)
+                    .($s->salary_month ? ' · '.$s->salary_month : '')
+                ),
+                'credit' => 0.0,
+                'debit' => (float) $s->net_amt,
+            ]);
+
         $journalOut = DB::table('journal_entry as j')
             ->leftJoin('pay_by as to_pb', 'to_pb.pbid', '=', 'j.to_acc')
             ->whereBetween('j.dt', [$effectiveFrom, $to])
@@ -250,6 +275,7 @@ class LedgerController extends Controller
             ->concat($invoices)
             ->concat($purchases)
             ->concat($expenses)
+            ->concat($salaryPayments)
             ->concat($journalOut)
             ->concat($journalIn)
             ->sortBy('date')
