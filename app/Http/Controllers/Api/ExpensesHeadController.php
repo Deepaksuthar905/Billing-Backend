@@ -30,18 +30,36 @@ class ExpensesHeadController extends Controller
 
     /**
      * Fetch all expenses_head records.
+     * Includes: payment (sum), party/payby/last_payment from latest expense under that head.
      */
     public function index(): JsonResponse
     {
+        $notDeleted = fn ($q) => $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+
         $paymentByHead = Expense::query()
             ->selectRaw('exhid, COALESCE(SUM(payment), 0) as total_payment')
-            ->where(fn ($q) => $q->whereNull('isdel')->orWhere('isdel', '!=', 1))
+            ->where($notDeleted)
             ->groupBy('exhid')
             ->pluck('total_payment', 'exhid');
 
-        $expensesHeads = ExpensesHead::all()->map(function (ExpensesHead $head) use ($paymentByHead) {
+        // Latest expense per head (for autofill: party, payby, last amount)
+        $latestByHead = Expense::query()
+            ->where($notDeleted)
+            ->whereNotNull('exhid')
+            ->orderByDesc('dt')
+            ->orderByDesc('exid')
+            ->get(['exhid', 'party', 'payby', 'payment'])
+            ->unique('exhid')
+            ->keyBy('exhid');
+
+        $expensesHeads = ExpensesHead::all()->map(function (ExpensesHead $head) use ($paymentByHead, $latestByHead) {
             $row = $head->toArray();
             $row['payment'] = (float) ($paymentByHead[$head->exhid] ?? 0);
+
+            $latest = $latestByHead->get($head->exhid);
+            $row['party'] = $latest?->party !== null ? (int) $latest->party : null;
+            $row['payby'] = $latest?->payby !== null ? (int) $latest->payby : null;
+            $row['last_payment'] = $latest ? round((float) $latest->payment, 2) : 0.0;
 
             return $row;
         });

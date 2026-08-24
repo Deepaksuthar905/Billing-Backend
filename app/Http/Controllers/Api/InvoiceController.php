@@ -63,15 +63,22 @@ class InvoiceController extends Controller
     }
 
     /**
+     * From this date (invoice dt), sync stores amt as the payment total;
+     * info is kept as description only. Older records keep info-splitting.
+     */
+    private const SYNC_AMT_ONLY_FROM = '2025-03-01';
+
+    /**
      * Build line-item rows from getamtlist record (inv_item, info, or default).
      *
      * - inv_item: JSON array, array, plain string (e.g. "Registration payment"), or null
-     * - info: e.g. "2000+2000+1000" → one invoice_item per numeric part
+     * - info (only before SYNC_AMT_ONLY_FROM): e.g. "2000+2000+1000" → one invoice_item per numeric part
+     * - dt >= SYNC_AMT_ONLY_FROM: single line, payment = amt, info as description
      * - if nothing else: one line with full invoice amount
      *
      * @return list<array<string, mixed>>
      */
-    private function collectSyncInvoiceItemLines(array $record, float $invoiceAmt): array
+    private function collectSyncInvoiceItemLines(array $record, float $invoiceAmt, bool $amtOnly = false): array
     {
         $raw = $record['inv_item'] ?? $record['inv_items'] ?? null;
 
@@ -94,8 +101,19 @@ class InvoiceController extends Controller
             ]];
         }
 
-        // inv_item null / empty → split info "2000+2000+1000"
         $info = $record['info'] ?? null;
+
+        // dt >= SYNC_AMT_ONLY_FROM: amt is the total; info is description only.
+        if ($amtOnly) {
+            return [[
+                'description' => is_string($info) && trim($info) !== '' ? trim($info) : 'Invoice amount',
+                'payment'     => $invoiceAmt,
+                'qty'         => 1,
+                'rate'        => $invoiceAmt,
+            ]];
+        }
+
+        // inv_item null / empty → split info "2000+2000+1000" (legacy, pre SYNC_AMT_ONLY_FROM)
         if (is_string($info) && $info !== '' && str_contains($info, '+')) {
             $parts = array_map('trim', explode('+', $info));
             $nums = [];
@@ -848,7 +866,10 @@ class InvoiceController extends Controller
                 $invoicesCreated++;
             }
 
-            $lines = $this->collectSyncInvoiceItemLines($record, $invoiceAmt);
+            // 01-03-2025 se: payment = amt only, info split nahi hota.
+            $amtOnly = $invDt >= self::SYNC_AMT_ONLY_FROM;
+
+            $lines = $this->collectSyncInvoiceItemLines($record, $invoiceAmt, $amtOnly);
             $n = count($lines);
             $rows = [];
             foreach ($lines as $line) {

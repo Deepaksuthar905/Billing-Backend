@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\GeneralEntryController;
 use App\Http\Controllers\Api\EmployeeController;
 use App\Http\Controllers\Api\SalaryPaymentController;
+use App\Http\Controllers\Api\MonthlyReportController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -81,6 +82,10 @@ Route::prefix('api')->group(function () {
     Route::get('/salary-payments', [SalaryPaymentController::class, 'index']);
     Route::get('/salary-payments/{salid}', [SalaryPaymentController::class, 'show'])->whereNumber('salid');
     Route::put('/salary-payments/{salid}', [SalaryPaymentController::class, 'update'])->whereNumber('salid');
+
+    Route::post('/monthly-reports/generate', [MonthlyReportController::class, 'generate']);
+    Route::get('/monthly-reports', [MonthlyReportController::class, 'index']);
+    Route::get('/monthly-reports/compare', [MonthlyReportController::class, 'compare']);
 
     Route::post('/delpay-in/{pinid}', [PayInController::class, 'delpay_in'])->whereNumber('pinid');
 });
