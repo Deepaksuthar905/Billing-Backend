@@ -887,7 +887,9 @@ class InvoiceController extends Controller
                 'balance'     => (float) $inv->balance,
                 'status'      => ($inv->balance && (float) $inv->balance > 0) ? 'pending' : 'paid',
                 'items'       => $inv->invoiceItems,
-                'gstno'        => $inv->gstno,
+                'gstno'        => $inv->gstno ?? null,
+                'gst_no'       => $inv->gstno ?? null,
+                'gst_regular'  => (int) ($inv->gst_regular ?? 0),
             ],
         ], 200);
     }
@@ -1011,6 +1013,9 @@ class InvoiceController extends Controller
                 'state' => $inv->state,
                 'status' => $status,
                 'billing_name' => $inv->billing_name ?? $inv->party?->billing_name,
+                'gstno' => $inv->gstno ?? null,
+                'gst_no' => $inv->gstno ?? null,
+                'gst_regular' => (int) ($inv->gst_regular ?? 0),
             ];
         });
 
@@ -1150,6 +1155,15 @@ class InvoiceController extends Controller
             $gstAmounts = $this->computeSyncGstAmounts($invoiceAmt, $syncState, $gstIncluded, $invDt);
             $totalAmt = $gstAmounts['total'];
 
+            // Buyer GSTIN claimed on superplayerauction → store on invoice for B2B reports.
+            $syncGstNo = isset($record['gstno']) ? trim((string) $record['gstno']) : '';
+            $syncGstNo = $syncGstNo !== '' ? $syncGstNo : null;
+            if (array_key_exists('gst_regular', $record) && $record['gst_regular'] !== null && $record['gst_regular'] !== '') {
+                $syncGstRegular = (int) (bool) $record['gst_regular'];
+            } else {
+                $syncGstRegular = $syncGstNo !== null ? 1 : 0;
+            }
+
             [$invoice, $createdNew] = $this->resolveSyncInvoice(
                 $party,
                 $invNo,
@@ -1161,6 +1175,8 @@ class InvoiceController extends Controller
                     'dt' => $invDt,
                     'state' => $syncState,
                     'addr' => $record['addr'] ?? $record['city'] ?? null,
+                    'gstno' => $syncGstNo,
+                    'gst_regular' => $syncGstRegular,
                     'gst' => $gstAmounts['gst'],
                     'payment' => $totalAmt,
                     'cgst' => $gstAmounts['cgst'],
@@ -1232,6 +1248,12 @@ class InvoiceController extends Controller
             }
 
             $invoice->state = $syncState;
+            if (Schema::hasColumn('invoice', 'gstno')) {
+                $invoice->gstno = $syncGstNo;
+            }
+            if (Schema::hasColumn('invoice', 'gst_regular')) {
+                $invoice->gst_regular = $syncGstRegular;
+            }
             // Keep first amid as refno if empty; otherwise leave so pay-in can still link via amid match on other rows.
             if ($refNo !== null && ($invoice->refno === null || $invoice->refno === '')) {
                 $invoice->refno = $refNo;

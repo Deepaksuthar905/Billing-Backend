@@ -25,6 +25,8 @@ class Invoice extends Model
         'state',
         'addr',
         'pid',
+        'gstno',
+        'gst_regular',
         'gst',
         'payment',
         'taxable_amt',
@@ -49,6 +51,7 @@ class Invoice extends Model
         return [
             'dt' => 'date',
             'paytype' => 'integer',
+            'gst_regular' => 'integer',
             'gst' => 'decimal:2',
             'payment' => 'decimal:2',
             'taxable_amt' => 'decimal:2',
