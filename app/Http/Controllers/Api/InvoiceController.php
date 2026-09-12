@@ -69,6 +69,179 @@ class InvoiceController extends Controller
     private const SYNC_AMT_ONLY_FROM = '2025-03-01';
 
     /**
+     * Invoice dt on/before this date → 6% GST (3% CGST + 3% SGST).
+     * From next day → 18% GST (9% + 9%).
+     */
+    private const SYNC_GST_6_PERCENT_UNTIL = '2025-12-31';
+
+    /** Master item used for sync line items when no selling item matches. */
+    private const SYNC_EASY_ITEM_NAME = 'Easy';
+
+    /** @var int|null */
+    private ?int $syncEasyItemId = null;
+
+    /**
+     * Cached selling items (sales=1) for sync matching.
+     * Each entry: item_id, item_name, description, name_norm, desc_norm
+     *
+     * @var list<array{item_id: int, item_name: string, description: string, name_norm: string, desc_norm: string}>
+     */
+    private array $syncSellingItems = [];
+
+    private bool $syncSellingItemsLoaded = false;
+
+    /**
+     * Load items.sales=1 once per sync run (in-memory "json" list for matching).
+     */
+    private function loadSyncSellingItems(): void
+    {
+        if ($this->syncSellingItemsLoaded) {
+            return;
+        }
+
+        $this->syncSellingItemsLoaded = true;
+        $this->syncSellingItems = [];
+
+        if (! Schema::hasColumn('items', 'sales')) {
+            return;
+        }
+
+        $rows = Item::query()
+            ->where('sales', 1)
+            ->orderBy('item_id')
+            ->get(['item_id', 'item_name', 'description']);
+
+        foreach ($rows as $row) {
+            $name = trim((string) ($row->item_name ?? ''));
+            $desc = trim((string) ($row->description ?? ''));
+            $this->syncSellingItems[] = [
+                'item_id' => (int) $row->item_id,
+                'item_name' => $name,
+                'description' => $desc,
+                'name_norm' => $this->normalizeSyncMatchText($name),
+                'desc_norm' => $this->normalizeSyncMatchText($desc),
+            ];
+        }
+    }
+
+    private function normalizeSyncMatchText(string $text): string
+    {
+        $text = strtolower(trim($text));
+        $text = preg_replace('/[^a-z0-9\s]+/u', ' ', $text) ?? $text;
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
+        return trim($text);
+    }
+
+    /**
+     * Match incoming sync label (inv_item / description) to a selling item (sales=1).
+     * Exact → contains → similar_text; fallback null (caller uses Easy).
+     */
+    private function matchSellingItemId(?string $label): ?int
+    {
+        $this->loadSyncSellingItems();
+
+        $needle = $this->normalizeSyncMatchText((string) $label);
+        if ($needle === '' || $this->syncSellingItems === []) {
+            return null;
+        }
+
+        // 1) Exact name / description
+        foreach ($this->syncSellingItems as $item) {
+            if ($item['name_norm'] !== '' && $item['name_norm'] === $needle) {
+                return $item['item_id'];
+            }
+            if ($item['desc_norm'] !== '' && $item['desc_norm'] === $needle) {
+                return $item['item_id'];
+            }
+        }
+
+        // 2) One contains the other
+        foreach ($this->syncSellingItems as $item) {
+            foreach ([$item['name_norm'], $item['desc_norm']] as $hay) {
+                if ($hay === '') {
+                    continue;
+                }
+                if (str_contains($hay, $needle) || str_contains($needle, $hay)) {
+                    return $item['item_id'];
+                }
+            }
+        }
+
+        // 3) Best similar_text score (threshold 55%)
+        $bestId = null;
+        $bestScore = 0.0;
+        foreach ($this->syncSellingItems as $item) {
+            foreach ([$item['name_norm'], $item['desc_norm']] as $hay) {
+                if ($hay === '') {
+                    continue;
+                }
+                similar_text($needle, $hay, $pct);
+                if ($pct > $bestScore) {
+                    $bestScore = $pct;
+                    $bestId = $item['item_id'];
+                }
+            }
+        }
+
+        return $bestScore >= 55.0 ? $bestId : null;
+    }
+
+    /**
+     * Financial year for a date (Apr–Mar): [from, to] as Y-m-d.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function financialYearRangeForDate(string $date): array
+    {
+        $dt = substr(trim($date), 0, 10);
+        $ts = strtotime($dt) ?: time();
+        $y = (int) date('Y', $ts);
+        $m = (int) date('n', $ts);
+
+        if ($m >= 4) {
+            return [sprintf('%04d-04-01', $y), sprintf('%04d-03-31', $y + 1)];
+        }
+
+        return [sprintf('%04d-04-01', $y - 1), sprintf('%04d-03-31', $y)];
+    }
+
+    /**
+     * Find or create the "Easy" master item for sync invoice lines (fallback).
+     */
+    private function resolveEasySyncItemId(): ?int
+    {
+        if ($this->syncEasyItemId !== null) {
+            return $this->syncEasyItemId;
+        }
+
+        $existing = Item::query()
+            ->whereRaw('LOWER(TRIM(item_name)) = ?', [strtolower(self::SYNC_EASY_ITEM_NAME)])
+            ->value('item_id');
+
+        if ($existing !== null) {
+            return $this->syncEasyItemId = (int) $existing;
+        }
+
+        $attrs = [
+            'item_name' => self::SYNC_EASY_ITEM_NAME,
+            'hsncode' => null,
+            'description' => 'Auto-created for invoice sync',
+            'rate' => 0,
+            'with_without' => 1,
+            'gst' => 18,
+            'gst_amt' => 0,
+        ];
+        if (Schema::hasColumn('items', 'sales')) {
+            $attrs['sales'] = 0;
+        }
+
+        $item = Item::create($attrs);
+
+        return $this->syncEasyItemId = (int) $item->item_id;
+    }
+
+    /**
      * Build line-item rows from getamtlist record (inv_item, info, or default).
      *
      * - inv_item: JSON array, array, plain string (e.g. "Registration payment"), or null
@@ -147,9 +320,85 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Map one line from superauction → invoice_item row (sync).
+     * Line description for sync: keep API label + amid tag so same text/amount
+     * from different external rows stay unique (4 entries → 4 Easy lines).
      */
-    private function mapSyncInvItemRow(array $line, int $invId, float $invoiceAmtFallback, int $lineCountInBatch = 1): array
+    private function syncItemDescription(array $record, array $line, ?string $refNo): string
+    {
+        $base = trim((string) ($line['description'] ?? $line['item'] ?? ''));
+        if ($base === '') {
+            $invItem = $record['inv_item'] ?? null;
+            if (is_string($invItem) && trim($invItem) !== '') {
+                $base = trim($invItem);
+            } elseif (is_string($record['info'] ?? null) && trim((string) $record['info']) !== '') {
+                $base = trim((string) $record['info']);
+            } else {
+                $base = 'Invoice amount';
+            }
+        }
+
+        if ($refNo !== null && $refNo !== '') {
+            $tag = '[#'.$refNo.']';
+            if (! str_contains($base, $tag)) {
+                $base = trim($base.' '.$tag);
+            }
+        }
+
+        return $base;
+    }
+
+    /**
+     * One invoice per party + inv_no within FY. Prefer that over amid so multiple
+     * external amids for invoice "530" merge into one bill with multiple Easy lines.
+     *
+     * @return array{0: ?\App\Models\Invoice, 1: bool} [invoice, createdNew]
+     */
+    private function resolveSyncInvoice(
+        Party $party,
+        ?string $invNo,
+        string $invDt,
+        ?string $refNo,
+        array $createAttrs
+    ): array {
+        $existing = null;
+
+        if ($invNo !== null && $invNo !== '') {
+            [$fyFrom, $fyTo] = $this->financialYearRangeForDate($invDt);
+            $group = $this->applyInvoiceNotDeletedScope(
+                Invoice::where('pid', $party->pid)
+                    ->where('inv_no', $invNo)
+                    ->whereBetween('dt', [$fyFrom, $fyTo])
+            )->orderBy('invid')->get();
+
+            if ($group->isNotEmpty()) {
+                $existing = $group->first();
+                // Soft-delete sibling invoices with same inv_no in FY (old amid-split rows).
+                foreach ($group->skip(1) as $sibling) {
+                    InvoiceItem::where('inv_id', $sibling->invid)->delete();
+                    $sibling->isdel = 1;
+                    $sibling->save();
+                }
+            }
+        }
+
+        if (! $existing && $refNo !== null) {
+            $existing = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $refNo))->first();
+        }
+
+        if ($existing) {
+            return [$existing, false];
+        }
+
+        $invoice = Invoice::create($createAttrs);
+
+        return [$invoice, true];
+    }
+
+    /**
+     * Map one line from superauction → invoice_item row (sync).
+     * item_id: best match from items.sales=1, else Easy fallback.
+     */
+    private function mapSyncInvItemRow(array $line, int $invId, float $invoiceAmtFallback, int $lineCountInBatch = 1, ?string $invoiceDt = null, bool $gstIncluded = true): array
     {
         $pay = (float) ($line['amount'] ?? $line['payment'] ?? $line['amt'] ?? $line['total'] ?? 0);
         if ($pay <= 0 && $invoiceAmtFallback > 0 && $lineCountInBatch === 1) {
@@ -166,46 +415,84 @@ class InvoiceController extends Controller
             $rate = $qty > 0 ? $pay / $qty : $pay;
         }
 
-        $row = [
-            'inv_id'       => $invId,
-            'item_id'      => isset($line['item_id']) ? (int) $line['item_id'] : null,
-            'hsnocde'      => $line['hsn_code'] ?? $line['hsnocde'] ?? $line['hsncode'] ?? null,
-            'description'  => $line['description'] ?? (isset($line['item']) ? (string) $line['item'] : null),
-            'rate'         => $rate,
-            'qty'          => $qty,
-            'payment'      => $pay > 0 ? $pay : ($rate * $qty),
-            'with_without' => (int) ($line['with_without'] ?? 0),
-            'gst'          => (float) ($line['tax_pct'] ?? $line['gst'] ?? $line['gst_pct'] ?? 0),
-            'gst_amt'      => (float) ($line['tax_amt'] ?? $line['gst_amt'] ?? 0),
-        ];
+        $payment = $pay > 0 ? $pay : ($rate * $qty);
+        if ($rate <= 0 && $payment > 0) {
+            $rate = $qty > 0 ? $payment / $qty : $payment;
+        }
 
-        $iid = $row['item_id'];
-        if ($iid === null || ! Item::where('item_id', $iid)->exists()) {
-            $fallback = Item::query()->orderBy('item_id')->value('item_id');
-            if ($fallback !== null) {
-                $row['item_id'] = (int) $fallback;
+        $gstRate = $this->syncGstRateForDate($invoiceDt);
+        $gstPct = round($gstRate * 100, 2);
+        $gstAmt = 0.0;
+        if ($payment > 0 && $gstRate > 0) {
+            if ($gstIncluded) {
+                $taxable = $payment * 100 / (100 + $gstPct);
+                $gstAmt = $payment - $taxable;
+            } else {
+                $gstAmt = $payment * $gstRate;
             }
         }
 
-        return $row;
+        $matchLabel = trim((string) (
+            $line['description']
+            ?? $line['item']
+            ?? $line['item_name']
+            ?? $line['name']
+            ?? ''
+        ));
+        $matchedId = $this->matchSellingItemId($matchLabel !== '' ? $matchLabel : null);
+        $itemId = $matchedId ?? $this->resolveEasySyncItemId();
+
+        $hsn = $line['hsn_code'] ?? $line['hsnocde'] ?? $line['hsncode'] ?? null;
+        if (($hsn === null || $hsn === '') && $matchedId !== null) {
+            $hsn = Item::where('item_id', $matchedId)->value('hsncode');
+        }
+
+        return [
+            'inv_id' => $invId,
+            'item_id' => $itemId,
+            'hsnocde' => $hsn,
+            'description' => $line['description'] ?? (isset($line['item']) ? (string) $line['item'] : null),
+            'rate' => round($rate, 2),
+            'qty' => $qty,
+            'payment' => round($payment, 2),
+            'with_without' => (int) ($line['with_without'] ?? ($gstIncluded ? 1 : 0)),
+            'gst' => (float) ($line['tax_pct'] ?? $line['gst'] ?? $line['gst_pct'] ?? $gstPct),
+            'gst_amt' => round((float) ($line['tax_amt'] ?? $line['gst_amt'] ?? $gstAmt), 2),
+        ];
     }
 
     /**
-     * GST 18% included in gross: taxable = gross × 100/118. Rajasthan → CGST+SGST; else IGST.
+     * GST rate for sync: <= 2025-12-31 → 6%; after that → 18%.
+     */
+    private function syncGstRateForDate(?string $invoiceDt): float
+    {
+        $dt = $invoiceDt !== null && $invoiceDt !== ''
+            ? substr(trim($invoiceDt), 0, 10)
+            : now()->format('Y-m-d');
+
+        return $dt <= self::SYNC_GST_6_PERCENT_UNTIL ? 0.06 : 0.18;
+    }
+
+    /**
+     * GST included in gross: taxable = gross × 100/(100+rate%).
+     * Rajasthan → half CGST + half SGST; else full IGST.
      *
      * @return array{0: float, 1: float, 2: float, 3: float} taxable_amt, cgst, sgst, igst
      */
-    private function splitInclusiveGst18(float $gross, ?string $state): array
+    private function splitInclusiveGst(float $gross, ?string $state, float $gstRate): array
     {
-        if ($gross <= 0) {
+        if ($gross <= 0 || $gstRate <= 0) {
             return [0.0, 0.0, 0.0, 0.0];
         }
-        $taxable = $gross * 100 / 118;
+
+        $taxable = $gross * 100 / (100 + ($gstRate * 100));
         if (trim((string) ($state ?? '')) === 'Rajasthan') {
-            return [$taxable, $taxable * 0.09, $taxable * 0.09, 0.0];
+            $half = $taxable * ($gstRate / 2);
+
+            return [$taxable, $half, $half, 0.0];
         }
 
-        return [$taxable, 0.0, 0.0, $taxable * 0.18];
+        return [$taxable, 0.0, 0.0, $taxable * $gstRate];
     }
 
     /**
@@ -230,7 +517,7 @@ class InvoiceController extends Controller
     }
 
     /**
-     * getamtlist gstext: 0 / empty → 18% GST included in amt; any other value → GST extra on top of amt.
+     * getamtlist gstext: 0 / empty → GST included in amt; any other value → GST extra on top of amt.
      */
     private function isSyncGstIncluded(array $record): bool
     {
@@ -249,15 +536,17 @@ class InvoiceController extends Controller
     /**
      * @return array{taxable: float, cgst: float, sgst: float, igst: float, gst: float, total: float}
      */
-    private function computeSyncGstAmounts(float $baseAmt, ?string $state, bool $gstIncluded): array
+    private function computeSyncGstAmounts(float $baseAmt, ?string $state, bool $gstIncluded, ?string $invoiceDt = null): array
     {
         $zero = ['taxable' => 0.0, 'cgst' => 0.0, 'sgst' => 0.0, 'igst' => 0.0, 'gst' => 0.0, 'total' => 0.0];
         if ($baseAmt <= 0) {
             return $zero;
         }
 
+        $gstRate = $this->syncGstRateForDate($invoiceDt);
+
         if ($gstIncluded) {
-            [$taxable, $cgst, $sgst, $igst] = $this->splitInclusiveGst18($baseAmt, $state);
+            [$taxable, $cgst, $sgst, $igst] = $this->splitInclusiveGst($baseAmt, $state, $gstRate);
 
             return [
                 'taxable' => $taxable,
@@ -271,13 +560,14 @@ class InvoiceController extends Controller
 
         $taxable = $baseAmt;
         if (trim((string) ($state ?? '')) === 'Rajasthan') {
-            $cgst = $taxable * 0.09;
-            $sgst = $taxable * 0.09;
+            $half = $taxable * ($gstRate / 2);
+            $cgst = $half;
+            $sgst = $half;
             $igst = 0.0;
         } else {
             $cgst = 0.0;
             $sgst = 0.0;
-            $igst = $taxable * 0.18;
+            $igst = $taxable * $gstRate;
         }
         $gst = $cgst + $sgst + $igst;
 
@@ -374,12 +664,20 @@ class InvoiceController extends Controller
                 $invoice = Invoice::where('invid', $apiInvId)->first();
             }
             // API invoice_id is often their id; link by amid → invoice.refno (same as invoice sync).
-            if (! $invoice) {
-                $amid = isset($record['amid']) ? trim((string) $record['amid']) : '';
-                if ($amid !== '') {
-                    $invoice = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $amid))
-                        ->orderByDesc('invid')
-                        ->first();
+            $amid = isset($record['amid']) ? trim((string) $record['amid']) : '';
+            if (! $invoice && $amid !== '') {
+                $invoice = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $amid))
+                    ->orderByDesc('invid')
+                    ->first();
+            }
+            // Multiple amids can share one inv_no; line descriptions carry [#amid].
+            if (! $invoice && $amid !== '') {
+                $invIdFromItem = InvoiceItem::query()
+                    ->where('description', 'like', '%[#'.$amid.']%')
+                    ->orderByDesc('inv_id')
+                    ->value('inv_id');
+                if ($invIdFromItem) {
+                    $invoice = $this->applyInvoiceNotDeletedScope(Invoice::where('invid', $invIdFromItem))->first();
                 }
             }
             if (! $invoice) {
@@ -487,7 +785,7 @@ class InvoiceController extends Controller
      *
      * @param  string|null  $stateForGst  Prefer current sync row state; falls back to $invoice->state.
      */
-    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt, ?string $stateForGst = null, bool $isDue = false, bool $gstIncluded = true): void
+    private function applyInvoiceTotalsFromLineItems(Invoice $invoice, float $fallbackAmt, ?string $stateForGst = null, bool $isDue = false, bool $gstIncluded = true, ?string $invoiceDt = null): void
     {
         $sum = (float) InvoiceItem::where('inv_id', $invoice->invid)->sum('payment');
         $baseAmt = $sum > 0 ? $sum : $fallbackAmt;
@@ -497,7 +795,9 @@ class InvoiceController extends Controller
         }
 
         $state = $stateForGst ?? $invoice->state;
-        $amounts = $this->computeSyncGstAmounts($baseAmt, $state, $gstIncluded);
+        $dt = $invoiceDt
+            ?? ($invoice->dt instanceof \Carbon\Carbon ? $invoice->dt->format('Y-m-d') : (string) ($invoice->getRawOriginal('dt') ?? ''));
+        $amounts = $this->computeSyncGstAmounts($baseAmt, $state, $gstIncluded, $dt);
 
         $invoice->payment = $amounts['total'];
         $invoice->taxable_amt = $amounts['taxable'];
@@ -667,7 +967,15 @@ class InvoiceController extends Controller
             });
         }
 
-        $invoices = $query->withSum('payIns as pay_in_total', 'amount')
+        $invoices = $query->withSum([
+                'payIns as pay_in_total' => function ($q) {
+                    if (Schema::hasColumn('pay_in', 'isdel')) {
+                        $q->where(function ($q2) {
+                            $q2->whereNull('isdel')->orWhere('isdel', '!=', 1);
+                        });
+                    }
+                },
+            ], 'amount')
             ->orderByDesc('dt')
             ->get();
 
@@ -725,6 +1033,18 @@ class InvoiceController extends Controller
         $invoice->isdel = 1;
         $invoice->save();
 
+        // Soft-delete related pay-in rows so they don't stay as due / ledger entries
+        $payInQuery = PayIn::where('inv_id', $id);
+        if (Schema::hasColumn('pay_in', 'isdel')) {
+            $payInQuery
+                ->where(function ($q) {
+                    $q->whereNull('isdel')->orWhere('isdel', '!=', 1);
+                })
+                ->update(['isdel' => 1]);
+        } else {
+            $payInQuery->delete();
+        }
+
         return response()->json(['message' => 'Invoice deleted successfully'], 200);
     }
 
@@ -778,6 +1098,10 @@ class InvoiceController extends Controller
         $body = $response->json() ?? [];
         $data = $this->collectSyncInvoiceList($body);
 
+        // Build selling-items list (sales=1) once before processing rows.
+        $this->loadSyncSellingItems();
+        $this->resolveEasySyncItemId();
+
         $partiesCreated = 0;
         $invoicesCreated = 0;
         $invoicesMatched = 0;
@@ -819,31 +1143,19 @@ class InvoiceController extends Controller
             $invNo = isset($record['invoice']) && $record['invoice'] !== '' ? (string) $record['invoice'] : null;
             $invDt = isset($record['dt']) && $record['dt'] !== '' ? (string) $record['dt'] : now()->format('Y-m-d');
 
-            // Match existing invoice (not deleted) in this order:
-            // 1) by refno (amid) — strict external unique id
-            // 2) by inv_no + pid — same invoice no. for party: one invoice row; new sync rows add items only
-            $existingInvoice = null;
-            if ($refNo !== null) {
-                $existingInvoice = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $refNo))->first();
-            }
-            if (! $existingInvoice && $invNo !== null) {
-                $existingInvoice = $this->applyInvoiceNotDeletedScope(
-                    Invoice::where('pid', $party->pid)->where('inv_no', $invNo)
-                )->orderByDesc('invid')->first();
-            }
-
             $invoiceAmt = (float) ($record['amt'] ?? 0);
             $isDue = $this->isSyncRecordDueInvoice($record);
             $paybyId = $this->resolveSyncPayById($record);
             $gstIncluded = $this->isSyncGstIncluded($record);
-            $gstAmounts = $this->computeSyncGstAmounts($invoiceAmt, $syncState, $gstIncluded);
+            $gstAmounts = $this->computeSyncGstAmounts($invoiceAmt, $syncState, $gstIncluded, $invDt);
             $totalAmt = $gstAmounts['total'];
 
-            if ($existingInvoice) {
-                $invoice = $existingInvoice;
-                $invoicesMatched++;
-            } else {
-                $invoice = Invoice::create([
+            [$invoice, $createdNew] = $this->resolveSyncInvoice(
+                $party,
+                $invNo,
+                $invDt,
+                $refNo,
+                [
                     'pid' => $party->pid,
                     'inv_no' => $invNo,
                     'dt' => $invDt,
@@ -861,9 +1173,13 @@ class InvoiceController extends Controller
                     'taxable_amt' => $gstAmounts['taxable'],
                     'paylater' => $isDue ? $totalAmt : 0,
                     'balance' => $isDue ? $totalAmt : 0,
-                ]);
+                ]
+            );
 
+            if ($createdNew) {
                 $invoicesCreated++;
+            } else {
+                $invoicesMatched++;
             }
 
             // 01-03-2025 se: payment = amt only, info split nahi hota.
@@ -876,22 +1192,30 @@ class InvoiceController extends Controller
                 if (! is_array($line)) {
                     continue;
                 }
-                $mapped = $this->mapSyncInvItemRow($line, $invoice->invid, $invoiceAmt, $n);
-                if ($mapped['item_id'] !== null) {
+                $mapped = $this->mapSyncInvItemRow($line, $invoice->invid, $invoiceAmt, $n, $invDt, $gstIncluded);
+                $mapped['description'] = $this->syncItemDescription($record, $mapped, $refNo);
+                if ($mapped['item_id'] !== null && (float) $mapped['payment'] > 0) {
                     $rows[] = $mapped;
                 }
             }
             if ($rows !== []) {
-                // Insert invoice items, but avoid exact duplicates on re-sync.
+                // Dedup by amid tag in description (same external row only).
                 $toInsert = [];
                 foreach ($rows as $r) {
-                    $dup = InvoiceItem::where('inv_id', $r['inv_id'])
-                        ->where('item_id', $r['item_id'])
-                        ->where('description', $r['description'])
-                        ->where('rate', $r['rate'])
-                        ->where('qty', $r['qty'])
-                        ->where('payment', $r['payment'])
-                        ->exists();
+                    if ($refNo !== null) {
+                        $dup = InvoiceItem::where('inv_id', $r['inv_id'])
+                            ->where('description', 'like', '%[#'.$refNo.']%')
+                            ->exists();
+                    } else {
+                        $dup = InvoiceItem::where('inv_id', $r['inv_id'])
+                            ->where('item_id', $r['item_id'])
+                            ->where('description', $r['description'])
+                            ->where('rate', $r['rate'])
+                            ->where('qty', $r['qty'])
+                            ->where('payment', $r['payment'])
+                            ->exists();
+                    }
+
                     if (! $dup) {
                         $toInsert[] = $r;
                     }
@@ -908,8 +1232,12 @@ class InvoiceController extends Controller
             }
 
             $invoice->state = $syncState;
+            // Keep first amid as refno if empty; otherwise leave so pay-in can still link via amid match on other rows.
+            if ($refNo !== null && ($invoice->refno === null || $invoice->refno === '')) {
+                $invoice->refno = $refNo;
+            }
 
-            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $syncState, $isDue, $gstIncluded);
+            $this->applyInvoiceTotalsFromLineItems($invoice, $invoiceAmt, $syncState, $isDue, $gstIncluded, $invDt);
         }
 
         $payInStats = $this->syncPayInRecords($this->collectSyncPayInList($body));

@@ -27,6 +27,7 @@ class Item extends Model
         'with_without',
         'gst',
         'gst_amt',
+        'sales',
     ];
 
     /**
@@ -38,6 +39,7 @@ class Item extends Model
     {
         return [
             'with_without' => 'integer',
+            'sales' => 'integer',
             'rate' => 'decimal:2',
             'gst' => 'decimal:2',
             'gst_amt' => 'decimal:2',

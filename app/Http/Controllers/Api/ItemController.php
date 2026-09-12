@@ -19,7 +19,10 @@ class ItemController extends Controller
             'with_without' => ['required', 'integer', 'in:0,1'],
             'gst' => ['nullable', 'numeric', 'min:0'],
             'gst_amt' => ['nullable', 'numeric', 'min:0'],
+            'sales' => ['nullable', 'integer', 'in:0,1'],
         ]);
+
+        $validated['sales'] = (int) ($validated['sales'] ?? 0);
 
         $item = Item::create($validated);
 
@@ -39,7 +42,10 @@ class ItemController extends Controller
             'with_without' => ['required', 'integer', 'in:0,1'],
             'gst' => ['nullable', 'numeric', 'min:0'],
             'gst_amt' => ['nullable', 'numeric', 'min:0'],
+            'sales' => ['nullable', 'integer', 'in:0,1'],
         ]);
+
+        $validated['sales'] = (int) ($validated['sales'] ?? 0);
 
         $item = Item::find($id);
         $item->update($validated);
