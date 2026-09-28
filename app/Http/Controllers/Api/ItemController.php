@@ -58,7 +58,7 @@ class ItemController extends Controller
 
 
     /**
-     * Items list. Query: search=, status= (optional filter).
+     * Items list. Query: search=, status=, sales= (0=purchase, 1=sales; omit = all).
      * Response: data: [], summary?: { totalItems, lowStockCount, outOfStockCount }
      */
     public function index(Request $request): JsonResponse
@@ -71,6 +71,15 @@ class ItemController extends Controller
                     ->orWhere('hsncode', 'like', "%{$search}%")
                     ->orWhere('description', 'like', "%{$search}%");
             });
+        }
+
+        if ($request->query('sales') !== null && $request->query('sales') !== '') {
+            $sales = (int) $request->query('sales');
+            if (in_array($sales, [0, 1], true)) {
+                if (\Illuminate\Support\Facades\Schema::hasColumn('items', 'sales')) {
+                    $query->where('sales', $sales);
+                }
+            }
         }
 
         $items = $query->get();

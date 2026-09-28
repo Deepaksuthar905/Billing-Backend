@@ -658,14 +658,11 @@ class InvoiceController extends Controller
                 continue;
             }
 
+            // Never use API invoice_id as local inv_id — it is their inv_no, not our invid.
+            // Only link pay-in when the invoice already exists locally (amid → refno / [#amid] line).
             $invoice = null;
-            $apiInvId = isset($record['invoice_id']) ? (int) $record['invoice_id'] : 0;
-            if ($apiInvId > 0) {
-                $invoice = Invoice::where('invid', $apiInvId)->first();
-            }
-            // API invoice_id is often their id; link by amid → invoice.refno (same as invoice sync).
             $amid = isset($record['amid']) ? trim((string) $record['amid']) : '';
-            if (! $invoice && $amid !== '') {
+            if ($amid !== '') {
                 $invoice = $this->applyInvoiceNotDeletedScope(Invoice::where('refno', $amid))
                     ->orderByDesc('invid')
                     ->first();
@@ -680,6 +677,7 @@ class InvoiceController extends Controller
                     $invoice = $this->applyInvoiceNotDeletedScope(Invoice::where('invid', $invIdFromItem))->first();
                 }
             }
+            // Invoice not in our DB yet → skip this pay-in (do not store inv_no into pay_in.inv_id).
             if (! $invoice) {
                 $skipped++;
                 continue;

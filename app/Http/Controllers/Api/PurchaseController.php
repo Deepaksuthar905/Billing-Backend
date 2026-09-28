@@ -23,6 +23,7 @@ class PurchaseController extends Controller
             'state' => ['nullable', 'string', 'max:100'],
             'payment' => ['nullable', 'numeric', 'min:0'],
             'taxable_amt' => ['nullable', 'numeric', 'min:0'],
+            'with_without' => ['nullable', 'integer', 'in:0,1'],
             'party_id' => ['nullable', 'integer', 'exists:party,pid'],
             // Frontend sends prhid; must be validated or it is stripped from $validated
             'prhid' => ['nullable', 'integer', 'exists:party,pid'],
@@ -73,6 +74,7 @@ class PurchaseController extends Controller
             'state' => ['nullable', 'string', 'max:100'],
             'payment' => ['nullable', 'numeric', 'min:0'],
             'taxable_amt' => ['nullable', 'numeric', 'min:0'],
+            'with_without' => ['nullable', 'integer', 'in:0,1'],
             'party_id' => ['nullable', 'integer', 'exists:party,pid'],
             'prhid' => ['nullable', 'integer', 'exists:party,pid'],
             'gst' => ['nullable', 'numeric', 'min:0'],
@@ -115,6 +117,16 @@ class PurchaseController extends Controller
             });
         }
 
+        $from = $request->query('from');
+        $to = $request->query('to');
+        if ($from && $to) {
+            $query->whereBetween('dt', [$from, $to]);
+        } elseif ($from) {
+            $query->whereDate('dt', '>=', $from);
+        } elseif ($to) {
+            $query->whereDate('dt', '<=', $to);
+        }
+
         $purchases = $query->orderByDesc('dt')->get();
 
         $data = $purchases->map(fn ($p) => [
@@ -124,6 +136,11 @@ class PurchaseController extends Controller
             'amount' => (float) $p->payment,
             'status' => 'completed',
             'taxable_amt' => (float) $p->taxable_amt,
+            'with_without' => $p->with_without,
+            'cgst' => (float) $p->cgst,
+            'sgst' => (float) $p->sgst,
+            'igst' => (float) $p->igst,
+            'state' => $p->state,
             'items' => $p->item?->item_name,
             'item_id' => $p->item,
             'payby' => $p->payBy?->pbid,
