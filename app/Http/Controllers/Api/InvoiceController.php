@@ -517,20 +517,13 @@ class InvoiceController extends Controller
     }
 
     /**
-     * getamtlist gstext: 0 / empty → GST included in amt; any other value → GST extra on top of amt.
+     * getamtlist gstext (0 or 18 etc.): source already finalised amt.
+     * Even when gstext=18 ("extra"), amt is the FINAL payable — never add GST on top.
+     * We only split GST out of amt for books (inclusive).
      */
     private function isSyncGstIncluded(array $record): bool
     {
-        if (! array_key_exists('gstext', $record)) {
-            return true;
-        }
-
-        $gstext = $record['gstext'];
-        if ($gstext === null || $gstext === '') {
-            return true;
-        }
-
-        return (float) $gstext === 0.0;
+        return true;
     }
 
     /**
